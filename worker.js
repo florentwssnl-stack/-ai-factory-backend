@@ -1,1448 +1,633 @@
+const WAN_BASE =
+  "https://observantdistressed-wan2-2-i2v-v3.hf.space/gradio_api";
+
+const LTX_BASE =
+  "https://lightricks-ltx-2-3.hf.space/gradio_api";
+
+const hfHeaders = (env) => ({
+  Authorization: `Bearer ${env.HF_TOKEN}`,
+  "Content-Type": "application/json",
+  "x-gradio-user": "api"
+});
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "*"
+    }
+  });
+}
+
+function corsResponse(response) {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Headers", "*");
+  headers.set("Access-Control-Allow-Methods", "*");
+
+  return new Response(response.body, {
+    status: response.status,
+    headers
+  });
+}
+
+function fileDataFromUrl(url, name = "input.png") {
+  return {
+    path: url,
+    url: url,
+    orig_name: name,
+    mime_type: "image/png",
+    is_stream: false,
+    meta: {
+      _type: "gradio.FileData"
+    }
+  };
+}
+
+async function queueJoin(base, data, fnIndex, env) {
+  const sessionHash = crypto.randomUUID();
+
+  const response = await fetch(`${base}/queue/join`, {
+    method: "POST",
+    headers: hfHeaders(env),
+    body: JSON.stringify({
+      data,
+      fn_index: fnIndex,
+      session_hash: sessionHash
+    })
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Queue join HTTP ${response.status}: ${text}`);
+  }
+
+  let result;
+
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error(`Réponse queue invalide: ${text}`);
+  }
+
+  return {
+    ...result,
+    session_hash: result.session_hash || sessionHash
+  };
+}
+
+async function streamQueue(base, sessionHash, env) {
+  const response = await fetch(
+    `${base}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${env.HF_TOKEN}`,
+        "x-gradio-user": "api",
+        Accept: "text/event-stream"
+      }
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Queue stream HTTP ${response.status}: ${text}`);
+  }
+
+  return response;
+}
+
+async function getInfo(base, env) {
+  const response = await fetch(`${base}/info`, {
+    headers: {
+      Authorization: `Bearer ${env.HF_TOKEN}`
+    }
+  });
+
+  const text = await response.text();
+
+  return {
+    status: response.status,
+    ok: response.ok,
+    info: text
+  };
+}
+
 export default {
   async fetch(request, env) {
-
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization"
-    };
+    const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: cors });
-    }
-
-    // ==========================================================
-    // SPACES
-    // ==========================================================
-
-    const WAN_BASE =
-      "https://observantdistressed-wan2-2-i2v-v3.hf.space/gradio_api";
-
-    const LTX_BASE =
-      "https://lightricks-ltx-2-3.hf.space/gradio_api";
-
-    const hfHeaders = {
-      Authorization:
-        `Bearer ${env.HF_TOKEN}`,
-      "x-gradio-user":
-        "api"
-    };
-
-    const json = (data, status = 200) =>
-      new Response(
-        JSON.stringify(data),
-        {
-          status,
-          headers: {
-            "Content-Type":
-              "application/json; charset=utf-8",
-            ...cors
-          }
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "*",
+          "Access-Control-Allow-Methods": "*"
         }
-      );
-
-    const url =
-      new URL(request.url);
-
-    // ==========================================================
-    // HOME
-    // ==========================================================
-
-    if (url.pathname === "/") {
-
-      return json({
-        service:
-          "AI FACTORY",
-
-        status:
-          "online",
-
-        version:
-          "11.0",
-
-        engines: [
-          "wan",
-          "ltx"
-        ]
       });
-
     }
 
-    // ==========================================================
-    // ENGINES
-    // ==========================================================
+    try {
+      // --------------------------------------------------
+      // HOME
+      // --------------------------------------------------
 
-    if (url.pathname === "/engines") {
-
-      return json({
-
-        engines: [
-
-          {
-            id:
-              "ltx",
-
-            name:
-              "LTX 2.3",
-
-            type:
-              "image-to-video",
-
-            status:
-              "online"
-          },
-
-          {
-            id:
-              "wan",
-
-            name:
-              "Wan 2.2",
-
-            type:
-              "image-to-video",
-
-            status:
-              "quota-limited"
-          }
-
-        ]
-
-      });
-
-    }
-
-    // ==========================================================
-    // HEALTH
-    // ==========================================================
-
-    if (url.pathname === "/health") {
-
-      const result = {
-        cloudflare:
-          true
-      };
-
-      // WAN
-      try {
-
-        const wan =
-          await fetch(
-            `${WAN_BASE}/info`,
-            {
-              headers:
-                hfHeaders
-            }
-          );
-
-        result.wan = {
-          status:
-            wan.status,
-
-          ok:
-            wan.ok
-        };
-
-      } catch (error) {
-
-        result.wan = {
-          ok:
-            false,
-
-          error:
-            error.message
-        };
-
+      if (url.pathname === "/") {
+        return json({
+          service: "AI FACTORY",
+          status: "online",
+          version: "12.0",
+          engines: ["wan", "ltx"]
+        });
       }
 
-      // LTX
-      try {
+      // --------------------------------------------------
+      // ENGINES
+      // --------------------------------------------------
 
-        const ltx =
-          await fetch(
-            `${LTX_BASE}/info`,
-            {
-              headers:
-                hfHeaders
-            }
-          );
-
-        result.ltx = {
-          status:
-            ltx.status,
-
-          ok:
-            ltx.ok
-        };
-
-      } catch (error) {
-
-        result.ltx = {
-          ok:
-            false,
-
-          error:
-            error.message
-        };
-
-      }
-
-      return json(result);
-    }
-
-    // ==========================================================
-    // GENERATE
-    // ==========================================================
-
-    if (
-      url.pathname === "/generate" &&
-      request.method === "POST"
-    ) {
-
-      try {
-
-        const body =
-          await request.json();
-
-        const engine =
-          body.engine ||
-          "ltx";
-
-        if (!body.image_url) {
-
-          return json({
-            submitted:
-              false,
-
-            error:
-              "image_url is required"
-          }, 400);
-
-        }
-
-        // ======================================================
-        // WAN 2.2
-        // ======================================================
-
-        if (
-          engine === "wan"
-        ) {
-
-          const data = [
-
-            // input image
-            {
-              path:
-                body.image_url,
-
-              url:
-                body.image_url,
-
-              size:
-                null,
-
-              orig_name:
-                "input.jpg",
-
-              mime_type:
-                "image/jpeg",
-
-              is_stream:
-                false,
-
-              meta: {
-                _type:
-                  "gradio.FileData"
-              }
+      if (url.pathname === "/engines") {
+        return json({
+          engines: {
+            ltx: {
+              name: "LTX 2.3",
+              status: "online",
+              space: "Lightricks/LTX-2-3"
             },
-
-            // last image
-            null,
-
-            // prompt
-            body.prompt ||
-              "cinematic realistic motion, subtle mysterious movement, photorealistic",
-
-            // steps
-            body.steps ??
-              6,
-
-            // negative prompt
-            body.negative_prompt ??
-              "",
-
-            // duration
-            body.duration_seconds ??
-              3.5,
-
-            // guidance
-            body.guidance_scale ??
-              1,
-
-            // guidance 2
-            body.guidance_scale_2 ??
-              1,
-
-            // seed
-            body.seed ??
-              42,
-
-            // randomize seed
-            body.randomize_seed ??
-              true,
-
-            // quality
-            body.quality ??
-              6,
-
-            // scheduler
-            body.scheduler ??
-              "UniPCMultistep",
-
-            // flow shift
-            body.flow_shift ??
-              3,
-
-            // frame multiplier
-            body.frame_multiplier ??
-              16,
-
-            // safe mode
-            body.safe_mode ??
-              true,
-
-            // LoRA groups
-            body.lora_groups ??
-              [],
-
-            // auto LoRA
-            body.auto_lora_enabled ??
-              true,
-
-            // display result
-            body.display_result ??
-              true
-          ];
-
-          const sessionHash =
-            crypto.randomUUID();
-
-          const response =
-            await fetch(
-              `${WAN_BASE}/queue/join`,
-              {
-                method:
-                  "POST",
-
-                headers: {
-                  ...hfHeaders,
-
-                  "Content-Type":
-                    "application/json"
-                },
-
-                body:
-                  JSON.stringify({
-
-                    data:
-                      data,
-
-                    fn_index:
-                      0,
-
-                    session_hash:
-                      sessionHash
-
-                  })
-              }
-            );
-
-          const text =
-            await response.text();
-
-          let result;
-
-          try {
-            result =
-              JSON.parse(text);
-          } catch {
-            result = {
-              raw:
-                text
-            };
+            wan: {
+              name: "Wan 2.2",
+              status: "online / quota limited",
+              space: "observantdistressed/wan2-2-i2v-v3"
+            }
           }
+        });
+      }
 
-          return json({
-            submitted:
-              response.ok,
+      // --------------------------------------------------
+      // HEALTH
+      // --------------------------------------------------
 
-            engine:
-              "wan",
+      if (url.pathname === "/health") {
+        const [ltx, wan] = await Promise.all([
+          getInfo(LTX_BASE, env),
+          getInfo(WAN_BASE, env)
+        ]);
 
-            session_hash:
-              sessionHash,
+        return json({
+          status: "ok",
+          cloudflare: true,
+          huggingface: {
+            ltx,
+            wan
+          }
+        });
+      }
 
-            event_id:
-              result.event_id ||
-              null,
+      // --------------------------------------------------
+      // GENERATE
+      // --------------------------------------------------
 
-            huggingface_status:
-              response.status,
+      if (url.pathname === "/generate" && request.method === "POST") {
+        const body = await request.json();
 
-            result:
-              result
+        const engine = body.engine || "ltx";
 
-          }, response.ok ? 200 : 502);
-        }
+        const imageUrl =
+          body.image_url ||
+          "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png";
 
-        // ======================================================
+        const prompt =
+          body.prompt ||
+          "Make this image come alive with cinematic motion, smooth animation";
+
+        const duration = Number(body.duration || 3);
+
+        // ------------------------------------------------
         // LTX 2.3
-        // ======================================================
+        // ------------------------------------------------
 
-        if (
-          engine === "ltx"
-        ) {
-
+        if (engine === "ltx") {
           /*
-           * LTX-2.3 CURRENT SPACE
-           *
-           * generate_video:
-           *
-           * 1 input_image
-           * 2 prompt
-           * 3 duration
-           * 4 enhance_prompt
-           * 5 seed
-           * 6 randomize_seed
-           * 7 height
-           * 8 width
-           */
+            LTX CONFIG EXACT :
+
+            id 5  = image
+            id 6  = prompt
+            id 8  = duration
+            id 10 = enhance prompt
+            id 16 = seed
+            id 17 = randomize seed
+            id 20 = height
+            id 19 = width
+
+            IMPORTANT :
+            generate_video = fn_index 2
+          */
 
           const data = [
-
-            // 1. image
-            {
-              path:
-                body.image_url,
-
-              url:
-                body.image_url,
-
-              size:
-                null,
-
-              orig_name:
-                "input.jpg",
-
-              mime_type:
-                "image/jpeg",
-
-              is_stream:
-                false,
-
-              meta: {
-                _type:
-                  "gradio.FileData"
-              }
-            },
-
-            // 2. prompt
-            body.prompt ||
-              "Make this image come alive with cinematic motion, smooth realistic animation, subtle camera movement",
-
-            // 3. duration
-            body.duration_seconds ??
-              3,
-
-            // 4. enhance prompt
-            body.enhance_prompt ??
-              false,
-
-            // 5. seed
-            body.seed ??
-              42,
-
-            // 6. randomize seed
-            body.randomize_seed ??
-              true,
-
-            // 7. height
-            body.height ??
-              768,
-
-            // 8. width
-            body.width ??
-              432
+            fileDataFromUrl(imageUrl),
+            prompt,
+            duration,
+            false,
+            42,
+            true,
+            768,
+            432
           ];
 
-          const sessionHash =
-            crypto.randomUUID();
-
-          const response =
-            await fetch(
-              `${LTX_BASE}/queue/join`,
-              {
-                method:
-                  "POST",
-
-                headers: {
-                  ...hfHeaders,
-
-                  "Content-Type":
-                    "application/json"
-                },
-
-                body:
-                  JSON.stringify({
-
-                    data:
-                      data,
-
-                    fn_index:
-                      0,
-
-                    session_hash:
-                      sessionHash
-
-                  })
-              }
-            );
-
-          const text =
-            await response.text();
-
-          let result;
-
-          try {
-            result =
-              JSON.parse(text);
-          } catch {
-            result = {
-              raw:
-                text
-            };
-          }
-
-          if (!response.ok) {
-
-            return json({
-              submitted:
-                false,
-
-              engine:
-                "ltx",
-
-              huggingface_status:
-                response.status,
-
-              result:
-                result
-
-            }, 502);
-
-          }
-
-          return json({
-
-            submitted:
-              true,
-
-            engine:
-              "ltx",
-
-            session_hash:
-              sessionHash,
-
-            event_id:
-              result.event_id ||
-              null
-
-          });
-
-        }
-
-        return json({
-
-          submitted:
-            false,
-
-          error:
-            "Unknown engine: " +
-            engine
-
-        }, 400);
-
-      } catch (error) {
-
-        return json({
-
-          submitted:
-            false,
-
-          error:
-            error.message
-
-        }, 500);
-
-      }
-    }
-
-    // ==========================================================
-    // RESULT
-    // ==========================================================
-
-    if (
-      url.pathname === "/result" &&
-      request.method === "GET"
-    ) {
-
-      const engine =
-        url.searchParams.get(
-          "engine"
-        ) ||
-        "ltx";
-
-      const sessionHash =
-        url.searchParams.get(
-          "session_hash"
-        );
-
-      if (!sessionHash) {
-
-        return json({
-          error:
-            "session_hash is required"
-        }, 400);
-
-      }
-
-      let base;
-
-      if (
-        engine === "wan"
-      ) {
-
-        base =
-          WAN_BASE;
-
-      } else if (
-        engine === "ltx"
-      ) {
-
-        base =
-          LTX_BASE;
-
-      } else {
-
-        return json({
-          error:
-            "Unknown engine"
-        }, 400);
-
-      }
-
-      try {
-
-        const response =
-          await fetch(
-            `${base}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
-            {
-              headers: {
-                ...hfHeaders,
-
-                Accept:
-                  "text/event-stream"
-              }
-            }
+          const result = await queueJoin(
+            LTX_BASE,
+            data,
+            2,
+            env
           );
 
-        if (!response.ok) {
-
-          const errorText =
-            await response.text();
-
           return json({
-
-            engine:
-              engine,
-
-            huggingface_status:
-              response.status,
-
-            error:
-              errorText
-
-          }, response.status);
-
+            submitted: true,
+            engine: "ltx",
+            session_hash: result.session_hash,
+            event_id: result.event_id || null
+          });
         }
 
-        return new Response(
-          response.body,
+        // ------------------------------------------------
+        // WAN 2.2
+        // ------------------------------------------------
+
+        if (engine === "wan") {
+          /*
+            WAN generate_video = fn_index 0
+
+            ordre exact du Space Wan :
+            1  image
+            2  last_image
+            3  prompt
+            4  steps
+            5  negative_prompt
+            6  duration
+            7  guidance
+            8  guidance_2
+            9  seed
+            10 randomize_seed
+            11 quality
+            12 scheduler
+            13 flow_shift
+            14 frame_multiplier
+            15 safe_mode
+            16 lora_groups
+            17 auto_lora
+            18 video_component
+          */
+
+          const data = [
+            fileDataFromUrl(imageUrl),
+            null,
+            prompt,
+            6,
+            "低质量，模糊，失真，静态画面",
+            3.5,
+            1,
+            1,
+            42,
+            true,
+            6,
+            "UniPCMultistep",
+            3,
+            16,
+            true,
+            [],
+            true,
+            true
+          ];
+
+          const result = await queueJoin(
+            WAN_BASE,
+            data,
+            0,
+            env
+          );
+
+          return json({
+            submitted: true,
+            engine: "wan",
+            session_hash: result.session_hash,
+            event_id: result.event_id || null
+          });
+        }
+
+        return json(
           {
-            status:
-              200,
+            error: `Moteur inconnu : ${engine}`
+          },
+          400
+        );
+      }
 
-            headers: {
+      // --------------------------------------------------
+      // RESULT / SSE
+      // --------------------------------------------------
 
-              "Content-Type":
-                "text/event-stream; charset=utf-8",
+      if (url.pathname === "/result") {
+        const engine = url.searchParams.get("engine") || "ltx";
+        const sessionHash = url.searchParams.get("session_hash");
 
-              "Cache-Control":
-                "no-cache, no-transform",
+        if (!sessionHash) {
+          return json(
+            {
+              error: "session_hash manquant"
+            },
+            400
+          );
+        }
 
-              "Connection":
-                "keep-alive",
+        const base =
+          engine === "wan"
+            ? WAN_BASE
+            : LTX_BASE;
 
-              ...cors
-
-            }
-          }
+        const response = await streamQueue(
+          base,
+          sessionHash,
+          env
         );
 
-      } catch (error) {
-
-        return json({
-
-          error:
-            error.message
-
-        }, 500);
-
+        return corsResponse(response);
       }
-    }
 
-    // ==========================================================
-    // TEST PAGE
-    // ==========================================================
+      // --------------------------------------------------
+      // TEST PAGE
+      // --------------------------------------------------
 
-    if (
-      url.pathname === "/test"
-    ) {
-
-      return new Response(`
-
+      if (url.pathname === "/test") {
+        const html = `
 <!DOCTYPE html>
-
-<html>
-
+<html lang="fr">
 <head>
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
-/>
-
-<title>AI FACTORY</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI FACTORY TEST</title>
 
 <style>
-
 body {
-  background:#111;
-  color:#fff;
-  font-family:Arial,sans-serif;
-  padding:20px;
-  margin:0;
+  font-family: Arial, sans-serif;
+  background: #0b0b0b;
+  color: white;
+  padding: 20px;
 }
 
-h1 {
-  margin-top:5px;
-}
-
-select,
-button {
-  width:100%;
-  box-sizing:border-box;
-  padding:16px;
-  margin-top:12px;
-  border:0;
-  border-radius:12px;
-  font-size:17px;
-}
-
-select {
-  background:#222;
-  color:white;
+button, select {
+  font-size: 18px;
+  padding: 12px;
+  margin: 5px 0;
+  width: 100%;
 }
 
 button {
-  background:#ff4d00;
-  color:white;
-  font-weight:bold;
+  background: #ff5a1f;
+  color: white;
+  border: 0;
+  border-radius: 8px;
 }
 
-button:disabled {
-  opacity:.5;
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #151515;
+  padding: 15px;
+  border-radius: 8px;
 }
-
-#status {
-  margin-top:20px;
-  padding:15px;
-  background:#1c1c1c;
-  border-radius:12px;
-  white-space:pre-wrap;
-  line-height:1.5;
-}
-
-#log {
-  margin-top:15px;
-  padding:15px;
-  background:#050505;
-  border-radius:12px;
-  color:#aaa;
-  font-size:12px;
-  white-space:pre-wrap;
-  word-break:break-word;
-  max-height:500px;
-  overflow:auto;
-}
-
-video {
-  width:100%;
-  margin-top:20px;
-  border-radius:12px;
-}
-
 </style>
-
 </head>
 
 <body>
 
 <h1>AI FACTORY</h1>
 
-<p>Multi-engine video test</p>
-
 <select id="engine">
-
-<option value="ltx">
-LTX 2.3
-</option>
-
-<option value="wan">
-Wan 2.2
-</option>
-
+  <option value="ltx">LTX 2.3</option>
+  <option value="wan">Wan 2.2</option>
 </select>
 
-<button
-  id="button"
-  onclick="generate()"
->
-GENERATE TEST VIDEO
-</button>
+<button onclick="generate()">GENERATE VIDEO</button>
 
-<div id="status">
-Prêt.
-</div>
-
-<div id="log"></div>
-
-<div id="videoContainer"></div>
+<pre id="output">Prêt.</pre>
 
 <script>
 
-let running = false;
-
-function status(text) {
-
-  document.getElementById(
-    "status"
-  ).textContent =
-    text;
-
-}
-
-function log(text) {
-
-  const box =
-    document.getElementById(
-      "log"
-    );
-
-  box.textContent +=
-    text + "\\n";
-
-  box.scrollTop =
-    box.scrollHeight;
-
-}
+const output = document.getElementById("output");
 
 async function generate() {
 
-  if (running)
-    return;
-
-  running =
-    true;
-
-  const button =
-    document.getElementById(
-      "button"
-    );
+  output.textContent = "Lancement...";
 
   const engine =
-    document.getElementById(
-      "engine"
-    ).value;
+    document.getElementById("engine").value;
 
-  button.disabled =
-    true;
+  const response = await fetch("/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      engine: engine,
+      image_url:
+        "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
+      prompt:
+        "Make this image come alive with cinematic motion, smooth animation, subtle camera movement",
+      duration: engine === "ltx" ? 3 : 3.5
+    })
+  });
 
-  button.textContent =
-    "GÉNÉRATION EN COURS...";
+  const start = await response.json();
 
-  status(
-    "⏳ Moteur : " +
-    engine +
-    "\\n\\nEnvoi vers Hugging Face..."
+  output.textContent =
+    "START:\\n" +
+    JSON.stringify(start, null, 2);
+
+  if (!start.session_hash) {
+    return;
+  }
+
+  const resultResponse = await fetch(
+    "/result?engine=" +
+    encodeURIComponent(engine) +
+    "&session_hash=" +
+    encodeURIComponent(start.session_hash)
   );
 
-  try {
+  if (!resultResponse.body) {
+    output.textContent +=
+      "\\n\\nERREUR : flux SSE absent";
+    return;
+  }
 
-    // ========================================================
-    // START
-    // ========================================================
+  const reader =
+    resultResponse.body.getReader();
 
-    const start =
-      await fetch(
-        "/generate",
-        {
-          method:
-            "POST",
+  const decoder =
+    new TextDecoder();
 
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
+  let buffer = "";
 
-          body:
-            JSON.stringify({
+  while (true) {
 
-              engine:
-                engine,
+    const { value, done } =
+      await reader.read();
 
-              image_url:
-                "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
-
-              prompt:
-                "Make this image come alive with cinematic motion, subtle realistic movement, smooth camera movement, natural motion",
-
-              duration_seconds:
-                engine === "ltx"
-                  ? 3
-                  : 3.5,
-
-              enhance_prompt:
-                false,
-
-              randomize_seed:
-                true,
-
-              safe_mode:
-                true,
-
-              display_result:
-                true,
-
-              /*
-               * LTX vertical 9:16
-               *
-               * Low resolution to keep
-               * the first test as light
-               * as possible.
-               */
-
-              width:
-                engine === "ltx"
-                  ? 432
-                  : undefined,
-
-              height:
-                engine === "ltx"
-                  ? 768
-                  : undefined
-
-            })
-        }
-      );
-
-    const job =
-      await start.json();
-
-    log(
-      "START:\\n" +
-      JSON.stringify(
-        job,
-        null,
-        2
-      )
-    );
-
-    if (
-      !job.session_hash
-    ) {
-
-      throw new Error(
-        JSON.stringify(
-          job
-        )
-      );
-
+    if (done) {
+      output.textContent +=
+        "\\n\\nFLUX FERMÉ";
+      break;
     }
 
-    const session =
-      job.session_hash;
-
-    status(
-      "🎬 Génération lancée.\\n\\n" +
-      "Moteur : " +
-      engine +
-      "\\n\\n" +
-      "Session : " +
-      session +
-      "\\n\\n" +
-      "⏳ En attente..."
+    buffer += decoder.decode(
+      value,
+      { stream: true }
     );
 
-    // ========================================================
-    // RESULT STREAM
-    // ========================================================
+    const messages =
+      buffer.split("\\n\\n");
 
-    const result =
-      await fetch(
-        "/result?engine=" +
-        encodeURIComponent(
-          engine
-        ) +
-        "&session_hash=" +
-        encodeURIComponent(
-          session
-        )
-      );
+    buffer =
+      messages.pop() || "";
 
-    if (!result.ok) {
+    for (const message of messages) {
 
-      throw new Error(
-        await result.text()
-      );
+      const lines =
+        message.split("\\n");
 
-    }
+      for (const line of lines) {
 
-    const reader =
-      result.body
-        .getReader();
-
-    const decoder =
-      new TextDecoder();
-
-    let buffer =
-      "";
-
-    while (true) {
-
-      const {
-        value,
-        done
-      } =
-        await reader.read();
-
-      if (done) {
-
-        log(
-          "FLUX FERMÉ"
-        );
-
-        break;
-
-      }
-
-      const chunk =
-        decoder.decode(
-          value,
-          {
-            stream:
-              true
-          }
-        );
-
-      log(
-        "RAW:\\n" +
-        chunk.substring(
-          0,
-          1500
-        )
-      );
-
-      buffer +=
-        chunk;
-
-      const events =
-        buffer.split(
-          /\\r?\\n\\r?\\n/
-        );
-
-      buffer =
-        events.pop();
-
-      for (
-        const event
-        of events
-      ) {
-
-        const lines =
-          event.split(
-            /\\r?\\n/
-          );
-
-        let eventType =
-          "";
-
-        let data =
-          "";
-
-        /*
-         * Gradio SSE can expose
-         * the message through
-         * "data:" without an
-         * explicit event name.
-         */
-
-        for (
-          const line
-          of lines
-        ) {
-
-          if (
-            line.startsWith(
-              "event:"
-            )
-          ) {
-
-            eventType =
-              line
-                .substring(6)
-                .trim();
-
-          }
-
-          if (
-            line.startsWith(
-              "data:"
-            )
-          ) {
-
-            data +=
-              line
-                .substring(5)
-                .trim();
-
-          }
-
+        if (!line.startsWith("data:")) {
+          continue;
         }
 
-        let parsed =
-          null;
+        const raw =
+          line.substring(5).trim();
+
+        if (!raw) {
+          continue;
+        }
+
+        let parsed;
 
         try {
-
-          parsed =
-            JSON.parse(
-              data
-            );
-
-        } catch {}
-
-        const msg =
-          parsed?.msg ||
-          parsed?.type ||
-          "";
-
-        log(
-          "EVENT: " +
-          eventType +
-          " / " +
-          msg
-        );
-
-        // ====================================================
-        // ESTIMATION
-        // ====================================================
-
-        if (
-          msg ===
-          "estimation"
-        ) {
-
-          const eta =
-            parsed?.rank_eta;
-
-          status(
-            "⏳ " +
-            engine.toUpperCase() +
-            " en file..." +
-            (
-              eta
-                ? "\\n\\nTemps estimé : " +
-                  Math.round(eta) +
-                  " s"
-                : ""
-            )
-          );
-
+          parsed = JSON.parse(raw);
+        } catch {
+          continue;
         }
 
-        // ====================================================
-        // START
-        // ====================================================
+        output.textContent +=
+          "\\n\\nEVENT: " +
+          (parsed.msg || "");
 
-        if (
-          msg ===
-          "process_starts"
-        ) {
+        if (parsed.msg === "process_completed") {
 
-          status(
-            "⚙️ " +
-            engine.toUpperCase() +
-            " commence la génération..."
-          );
-
-        }
-
-        // ====================================================
-        // PROGRESS
-        // ====================================================
-
-        if (
-          msg ===
-          "progress"
-        ) {
-
-          status(
-            "🎬 " +
-            engine.toUpperCase() +
-            " génère la vidéo..."
-          );
-
-        }
-
-        // ====================================================
-        // COMPLETED
-        // ====================================================
-
-        if (
-          msg ===
-          "process_completed"
-        ) {
-
-          log(
-            "COMPLETED:\\n" +
+          output.textContent +=
+            "\\n\\nCOMPLETED:\\n" +
             JSON.stringify(
               parsed,
               null,
               2
-            )
-          );
-
-          if (
-            parsed?.success ===
-            false
-          ) {
-
-            const output =
-              parsed.output;
-
-            const error =
-              output?.error ||
-              output ||
-              "Erreur inconnue";
-
-            status(
-              "❌ ERREUR " +
-              engine.toUpperCase() +
-              "\\n\\n" +
-              error
             );
 
-            await reader.cancel();
+          // Cherche automatiquement une vidéo
+          const data =
+            parsed.output &&
+            parsed.output.data;
 
-            return;
+          if (Array.isArray(data)) {
 
+            for (const item of data) {
+
+              if (
+                item &&
+                typeof item === "object" &&
+                (
+                  item.url ||
+                  item.path ||
+                  item.video
+                )
+              ) {
+
+                output.textContent +=
+                  "\\n\\nVIDEO TROUVÉE :\\n" +
+                  JSON.stringify(
+                    item,
+                    null,
+                    2
+                  );
+
+                if (item.url) {
+
+                  output.innerHTML +=
+                    "<br><br>" +
+                    '<a href="' +
+                    item.url +
+                    '" target="_blank" style="color:#ff7b39;font-size:20px">' +
+                    "🎬 OUVRIR LA VIDÉO" +
+                    "</a>";
+                }
+              }
+            }
           }
+        }
 
-          const output =
-            parsed?.output;
+        if (
+          parsed.msg === "error" ||
+          parsed.msg === "queue_full"
+        ) {
 
-          /*
-           * LTX output:
-           *
-           * [video, seed]
-           *
-           * Wan output:
-           *
-           * [video, file, seed]
-           */
-
-          let video =
-            Array.isArray(
-              output
-            )
-              ? output[0]
-              : output;
-
-          const videoUrl =
-            video?.url ||
-            video?.path;
-
-          if (
-            videoUrl
-          ) {
-
-            status(
-              "🎉 VIDÉO TERMINÉE !"
+          output.textContent +=
+            "\\n\\nERREUR:\\n" +
+            JSON.stringify(
+              parsed,
+              null,
+              2
             );
-
-            document
-              .getElementById(
-                "videoContainer"
-              )
-              .innerHTML =
-              '<video controls autoplay playsinline src="' +
-              videoUrl +
-              '"></video>';
-
-          } else {
-
-            status(
-              "⚠️ Génération terminée, mais URL vidéo introuvable."
-            );
-
-          }
-
-          await reader.cancel();
-
-          return;
-
         }
 
-        // ====================================================
-        // ERROR
-        // ====================================================
-
-        if (
-          msg ===
-          "error" ||
-          eventType ===
-          "error"
-        ) {
-
-          status(
-            "❌ ERREUR " +
-            engine.toUpperCase() +
-            "\\n\\n" +
-            (
-              parsed?.message ||
-              data ||
-              "Erreur inconnue"
-            )
-          );
-
-          await reader.cancel();
-
-          return;
-
+        if (parsed.msg === "close_stream") {
+          output.textContent +=
+            "\\n\\nFLUX FERMÉ";
         }
-
-        // ====================================================
-        // QUEUE FULL
-        // ====================================================
-
-        if (
-          msg ===
-          "queue_full"
-        ) {
-
-          status(
-            "⏳ " +
-            engine.toUpperCase() +
-            " est actuellement occupé.\\n\\n" +
-            "La génération attend dans la file..."
-          );
-
-        }
-
-        // ====================================================
-        // CLOSE
-        // ====================================================
-
-        if (
-          msg ===
-          "close_stream"
-        ) {
-
-          status(
-            "🔌 Flux terminé."
-          );
-
-          await reader.cancel();
-
-          return;
-
-        }
-
       }
-
     }
-
-  } catch (error) {
-
-    status(
-      "❌ " +
-      error.message
-    );
-
-    log(
-      "EXCEPTION:\\n" +
-      error.stack
-    );
-
-  } finally {
-
-    running =
-      false;
-
-    button.disabled =
-      false;
-
-    button.textContent =
-      "GENERATE TEST VIDEO";
-
   }
-
 }
 
 </script>
 
 </body>
-
 </html>
+`;
 
-      `, {
-        headers: {
-          "Content-Type":
-            "text/html; charset=utf-8",
-          ...cors
-        }
-      });
+        return new Response(html, {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      }
 
+      return json(
+        {
+          error: "Route inconnue"
+        },
+        404
+      );
+
+    } catch (error) {
+
+      return json(
+        {
+          error: error.message || String(error)
+        },
+        500
+      );
     }
-
-    // ==========================================================
-    // 404
-    // ==========================================================
-
-    return json({
-      error:
-        "Route not found"
-    }, 404);
   }
 };
