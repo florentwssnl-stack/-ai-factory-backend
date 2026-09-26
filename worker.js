@@ -14,32 +14,38 @@ export default {
     const HF_BASE =
       "https://observantdistressed-wan2-2-i2v-v3.hf.space/gradio_api";
 
-    const json = (data, status = 200) =>
-      new Response(JSON.stringify(data), {
+    const hfHeaders = {
+      Authorization: `Bearer ${env.HF_TOKEN}`,
+      "x-gradio-user": "api"
+    };
+
+    const json = (data, status = 200) => {
+      return new Response(JSON.stringify(data), {
         status,
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json; charset=utf-8",
           ...cors
         }
       });
+    };
 
     const url = new URL(request.url);
 
-    // =========================
+    // ============================================================
     // HOME
-    // =========================
+    // ============================================================
 
     if (url.pathname === "/") {
       return json({
         service: "AI FACTORY",
         status: "online",
-        version: "7.0"
+        version: "8.0"
       });
     }
 
-    // =========================
+    // ============================================================
     // HEALTH
-    // =========================
+    // ============================================================
 
     if (url.pathname === "/health") {
 
@@ -48,19 +54,18 @@ export default {
         const response = await fetch(
           `${HF_BASE}/info`,
           {
-            headers: {
-              Authorization:
-                `Bearer ${env.HF_TOKEN}`
-            }
+            method: "GET",
+            headers: hfHeaders
           }
         );
 
+        const text = await response.text();
+
         return json({
           cloudflare: true,
-          huggingface_status:
-            response.status,
-          huggingface_ok:
-            response.ok
+          huggingface_status: response.status,
+          huggingface_ok: response.ok,
+          response_preview: text.substring(0, 500)
         });
 
       } catch (error) {
@@ -74,9 +79,9 @@ export default {
       }
     }
 
-    // =========================
+    // ============================================================
     // GENERATE
-    // =========================
+    // ============================================================
 
     if (
       url.pathname === "/generate" &&
@@ -85,129 +90,132 @@ export default {
 
       try {
 
-        const body =
-          await request.json();
+        const body = await request.json();
 
         if (!body.image_url) {
-
           return json({
-            error:
-              "image_url is required"
+            submitted: false,
+            error: "image_url is required"
           }, 400);
-
         }
 
         /*
-          IMPORTANT
-
-          Gradio 6 API:
-          POST /call/generate_video
-
-          Body:
-          {
-            data: [...]
-          }
-
-          The order MUST match
-          the Space's API schema.
-        */
+         * IMPORTANT
+         *
+         * Exact input order from the Space config:
+         *
+         * 9  = input_image
+         * 18 = last_image
+         * 6  = prompt
+         * 26 = steps
+         * 19 = negative_prompt
+         * 14 = duration
+         * 29 = guidance_scale
+         * 30 = guidance_scale_2
+         * 22 = seed
+         * 24 = randomize_seed
+         * 21 = quality
+         * 31 = scheduler
+         * 27 = flow_shift
+         * 15 = frame_multiplier
+         * 12 = safe_mode
+         * 32 = lora_groups
+         * 11 = auto_lora_enabled
+         * 33 = display_result
+         */
 
         const data = [
 
-          // 1 - input_image
+          // 1. input_image
           {
-            path:
-              body.image_url,
-            url:
-              body.image_url,
-            size:
-              null,
-            orig_name:
-              "input.jpg",
-            mime_type:
-              "image/jpeg",
-            is_stream:
-              false,
+            path: body.image_url,
+            url: body.image_url,
+            size: null,
+            orig_name: "input.jpg",
+            mime_type: "image/jpeg",
+            is_stream: false,
             meta: {
-              _type:
-                "gradio.FileData"
+              _type: "gradio.FileData"
             }
           },
 
-          // 2 - last_image
+          // 2. last_image
           null,
 
-          // 3 - prompt
+          // 3. prompt
           body.prompt ||
             "cinematic realistic motion, subtle mysterious movement, photorealistic",
 
-          // 4 - steps
+          // 4. steps
           body.steps ?? 6,
 
-          // 5 - negative_prompt
+          // 5. negative_prompt
           body.negative_prompt ?? "",
 
-          // 6 - duration
+          // 6. duration
           body.duration_seconds ?? 3.5,
 
-          // 7 - guidance_scale
+          // 7. guidance_scale
           body.guidance_scale ?? 1,
 
-          // 8 - guidance_scale_2
+          // 8. guidance_scale_2
           body.guidance_scale_2 ?? 1,
 
-          // 9 - seed
+          // 9. seed
           body.seed ?? 42,
 
-          // 10 - randomize_seed
+          // 10. randomize_seed
           body.randomize_seed ?? true,
 
-          // 11 - quality
+          // 11. quality
           body.quality ?? 6,
 
-          // 12 - scheduler
-          body.scheduler ??
-            "UniPCMultistep",
+          // 12. scheduler
+          body.scheduler ?? "UniPCMultistep",
 
-          // 13 - flow_shift
+          // 13. flow_shift
           body.flow_shift ?? 3,
 
-          // 14 - frame_multiplier
+          // 14. frame_multiplier
           body.frame_multiplier ?? 16,
 
-          // 15 - safe_mode
+          // 15. safe_mode
           body.safe_mode ?? true,
 
-          // 16 - lora_groups
+          // 16. lora_groups
           body.lora_groups ?? [],
 
-          // 17 - auto_lora_enabled
+          // 17. auto_lora_enabled
           body.auto_lora_enabled ?? true,
 
-          // 18 - display_result
+          // 18. display_result
           body.display_result ?? true
         ];
 
-        const response =
-          await fetch(
-            `${HF_BASE}/call/generate_video`,
-            {
-              method:
-                "POST",
+        const sessionHash =
+          crypto.randomUUID();
 
-              headers: {
-                Authorization:
-                  `Bearer ${env.HF_TOKEN}`,
-                "Content-Type":
-                  "application/json"
-              },
+        // --------------------------------------------------------
+        // JOIN GRADIO QUEUE
+        // --------------------------------------------------------
 
-              body:
-                JSON.stringify({
-                  data
-                })
-            }
-          );
+        const response = await fetch(
+          `${HF_BASE}/queue/join`,
+          {
+            method: "POST",
+
+            headers: {
+              ...hfHeaders,
+              "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+              data: data,
+              fn_index: 0,
+              session_hash: sessionHash
+            })
+          }
+        );
 
         const text =
           await response.text();
@@ -215,8 +223,7 @@ export default {
         let result;
 
         try {
-          result =
-            JSON.parse(text);
+          result = JSON.parse(text);
         } catch {
           result = {
             raw: text
@@ -226,71 +233,50 @@ export default {
         if (!response.ok) {
 
           return json({
-            submitted:
-              false,
+            submitted: false,
             huggingface_status:
               response.status,
-            result
-          }, 502);
-
-        }
-
-        if (!result.event_id) {
-
-          return json({
-            submitted:
-              false,
-            error:
-              "Hugging Face did not return an event_id",
-            result
+            result: result
           }, 502);
 
         }
 
         return json({
-          submitted:
-            true,
-
+          submitted: true,
+          session_hash: sessionHash,
           event_id:
-            result.event_id,
-
-          poll_url:
-            `/result?event_id=${encodeURIComponent(
-              result.event_id
-            )}`
+            result.event_id || null
         });
 
       } catch (error) {
 
         return json({
-          submitted:
-            false,
-          error:
-            error.message
+          submitted: false,
+          error: error.message
         }, 500);
 
       }
     }
 
-    // =========================
-    // RESULT
-    // =========================
+    // ============================================================
+    // RESULT SSE
+    // ============================================================
 
     if (
       url.pathname === "/result" &&
       request.method === "GET"
     ) {
 
-      const eventId =
+      const sessionHash =
         url.searchParams.get(
-          "event_id"
+          "session_hash"
         );
 
-      if (!eventId) {
+      if (!sessionHash) {
 
         return json({
           error:
-            "event_id is required"
+            "session_hash is required"
         }, 400);
 
       }
@@ -299,11 +285,12 @@ export default {
 
         const response =
           await fetch(
-            `${HF_BASE}/call/generate_video/${encodeURIComponent(eventId)}`,
+            `${HF_BASE}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
             {
+              method: "GET",
+
               headers: {
-                Authorization:
-                  `Bearer ${env.HF_TOKEN}`,
+                ...hfHeaders,
                 Accept:
                   "text/event-stream"
               }
@@ -316,10 +303,10 @@ export default {
             await response.text();
 
           return json({
-            error:
-              errorText,
             huggingface_status:
-              response.status
+              response.status,
+            error:
+              errorText
           }, response.status);
 
         }
@@ -327,8 +314,7 @@ export default {
         return new Response(
           response.body,
           {
-            status:
-              200,
+            status: 200,
 
             headers: {
               "Content-Type":
@@ -355,9 +341,9 @@ export default {
       }
     }
 
-    // =========================
-    // TEST
-    // =========================
+    // ============================================================
+    // TEST PAGE
+    // ============================================================
 
     if (url.pathname === "/test") {
 
@@ -380,20 +366,25 @@ export default {
 
 body {
   background:#111;
-  color:white;
+  color:#fff;
   font-family:Arial,sans-serif;
-  padding:25px;
+  padding:20px;
+  margin:0;
+}
+
+h1 {
+  margin-top:10px;
 }
 
 button {
-  background:#ff4d00;
-  color:white;
-  border:0;
+  width:100%;
   padding:18px;
+  border:0;
   border-radius:12px;
+  background:#ff4d00;
+  color:#fff;
   font-size:18px;
   font-weight:bold;
-  width:100%;
 }
 
 button:disabled {
@@ -402,16 +393,24 @@ button:disabled {
 
 #status {
   margin-top:20px;
-  line-height:1.5;
+  padding:15px;
+  background:#1b1b1b;
+  border-radius:12px;
   white-space:pre-wrap;
+  line-height:1.5;
 }
 
 #log {
-  margin-top:20px;
+  margin-top:15px;
+  padding:15px;
+  background:#080808;
+  border-radius:12px;
   color:#aaa;
   font-size:12px;
   white-space:pre-wrap;
   word-break:break-word;
+  max-height:400px;
+  overflow:auto;
 }
 
 video {
@@ -428,7 +427,7 @@ video {
 
 <h1>AI FACTORY</h1>
 
-<p>Wan 2.2 — Test vidéo</p>
+<p>Wan 2.2 — diagnostic</p>
 
 <button
   id="button"
@@ -449,7 +448,7 @@ Prêt.
 
 let running = false;
 
-function status(text) {
+function setStatus(text) {
 
   document.getElementById(
     "status"
@@ -459,17 +458,22 @@ function status(text) {
 
 function log(text) {
 
-  document.getElementById(
-    "log"
-  ).textContent +=
-    "\\n" + text;
+  const box =
+    document.getElementById(
+      "log"
+    );
+
+  box.textContent +=
+    text + "\\n";
+
+  box.scrollTop =
+    box.scrollHeight;
 
 }
 
 async function generate() {
 
-  if (running)
-    return;
+  if (running) return;
 
   running = true;
 
@@ -478,50 +482,61 @@ async function generate() {
       "button"
     );
 
-  button.disabled =
-    true;
+  const videoContainer =
+    document.getElementById(
+      "videoContainer"
+    );
+
+  button.disabled = true;
 
   button.textContent =
     "GÉNÉRATION EN COURS...";
 
-  status(
+  setStatus(
     "⏳ Envoi vers Wan 2.2..."
   );
 
   try {
 
-    // =====================
-    // START JOB
-    // =====================
+    // ==========================================================
+    // START
+    // ==========================================================
 
     const start =
       await fetch(
         "/generate",
         {
-          method:
-            "POST",
+          method:"POST",
 
-          headers: {
+          headers:{
             "Content-Type":
               "application/json"
           },
 
-          body:
-            JSON.stringify({
+          body:JSON.stringify({
 
-              image_url:
-                "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
+            image_url:
+              "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
 
-              prompt:
-                "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
+            prompt:
+              "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
 
-              duration_seconds:
-                3.5,
+            duration_seconds:
+              3.5,
 
-              steps:
-                6
+            steps:
+              6,
 
-            })
+            randomize_seed:
+              true,
+
+            safe_mode:
+              true,
+
+            display_result:
+              true
+
+          })
         }
       );
 
@@ -529,38 +544,44 @@ async function generate() {
       await start.json();
 
     log(
-      "START: " +
-      JSON.stringify(job)
+      "START:\\n" +
+      JSON.stringify(
+        job,
+        null,
+        2
+      )
     );
 
-    if (!job.event_id) {
+    if (!job.session_hash) {
 
       throw new Error(
-        JSON.stringify(job)
+        JSON.stringify(
+          job
+        )
       );
 
     }
 
-    const eventId =
-      job.event_id;
+    const session =
+      job.session_hash;
 
-    status(
+    setStatus(
       "🎬 Génération lancée.\\n\\n" +
-      "Event ID : " +
-      eventId +
+      "Session : " +
+      session +
       "\\n\\n" +
-      "⏳ Wan 2.2 travaille..."
+      "⏳ Connexion au flux Wan 2.2..."
     );
 
-    // =====================
-    // STREAM RESULT
-    // =====================
+    // ==========================================================
+    // RESULT STREAM
+    // ==========================================================
 
     const result =
       await fetch(
-        "/result?event_id=" +
+        "/result?session_hash=" +
         encodeURIComponent(
-          eventId
+          session
         )
       );
 
@@ -592,20 +613,29 @@ async function generate() {
       if (done) {
 
         log(
-          "Flux terminé."
+          "STREAM CLOSED"
         );
 
         break;
       }
 
-      buffer +=
+      const chunk =
         decoder.decode(
           value,
           {
-            stream:
-              true
+            stream:true
           }
         );
+
+      log(
+        "RAW:\\n" +
+        chunk.substring(
+          0,
+          1000
+        )
+      );
+
+      buffer += chunk;
 
       const events =
         buffer.split(
@@ -625,7 +655,7 @@ async function generate() {
             /\\r?\\n/
           );
 
-        let type =
+        let eventType =
           "";
 
         let data =
@@ -642,7 +672,7 @@ async function generate() {
             )
           ) {
 
-            type =
+            eventType =
               line
                 .substring(6)
                 .trim();
@@ -666,56 +696,139 @@ async function generate() {
 
         log(
           "EVENT: " +
-          type
+          eventType
         );
 
-        // =================
-        // HEARTBEAT
-        // =================
+        // ------------------------------------------------------
+        // QUEUE FULL
+        // ------------------------------------------------------
 
         if (
-          type ===
-          "heartbeat"
+          eventType ===
+          "queue_full"
         ) {
 
-          status(
-            "💓 Wan 2.2 est toujours actif..."
+          setStatus(
+            "⏳ Wan 2.2 est occupé.\\n\\n" +
+            "Le job attend dans la file..."
           );
 
         }
 
-        // =================
-        // START
-        // =================
+        // ------------------------------------------------------
+        // ESTIMATION
+        // ------------------------------------------------------
 
         if (
-          type ===
-          "generating"
-          ||
-          type ===
+          eventType ===
+          "estimation"
+        ) {
+
+          setStatus(
+            "⏳ En attente de Wan 2.2..."
+          );
+
+        }
+
+        // ------------------------------------------------------
+        // START
+        // ------------------------------------------------------
+
+        if (
+          eventType ===
           "process_starts"
         ) {
 
-          status(
-            "⚙️ Wan 2.2 génère la vidéo..."
+          setStatus(
+            "⚙️ Wan 2.2 commence la génération..."
           );
 
         }
 
-        // =================
-        // COMPLETE
-        // =================
+        // ------------------------------------------------------
+        // PROGRESS
+        // ------------------------------------------------------
 
         if (
-          type ===
-          "complete"
-          ||
-          type ===
+          eventType ===
+          "progress"
+        ) {
+
+          setStatus(
+            "🎬 Wan 2.2 génère la vidéo..."
+          );
+
+        }
+
+        // ------------------------------------------------------
+        // DATA
+        // ------------------------------------------------------
+
+        if (
+          eventType ===
+          "data"
+        ) {
+
+          try {
+
+            const parsed =
+              JSON.parse(
+                data
+              );
+
+            log(
+              "DATA:\\n" +
+              JSON.stringify(
+                parsed,
+                null,
+                2
+              )
+            );
+
+            const video =
+              parsed?.[0];
+
+            const videoUrl =
+              video?.url ||
+              video?.path;
+
+            if (
+              videoUrl
+            ) {
+
+              setStatus(
+                "🎬 VIDÉO REÇUE !"
+              );
+
+              videoContainer.innerHTML =
+                '<video controls autoplay playsinline src="' +
+                videoUrl +
+                '"></video>';
+
+            }
+
+          } catch (error) {
+
+            log(
+              "DATA PARSE ERROR: " +
+              error.message
+            );
+
+          }
+
+        }
+
+        // ------------------------------------------------------
+        // COMPLETE
+        // ------------------------------------------------------
+
+        if (
+          eventType ===
           "process_completed"
         ) {
 
-          status(
-            "🎉 VIDÉO TERMINÉE !"
+          setStatus(
+            "✅ VIDÉO TERMINÉE !"
           );
 
           try {
@@ -724,6 +837,15 @@ async function generate() {
               JSON.parse(
                 data
               );
+
+            log(
+              "COMPLETED:\\n" +
+              JSON.stringify(
+                parsed,
+                null,
+                2
+              )
+            );
 
             const output =
               parsed.output ||
@@ -744,31 +866,18 @@ async function generate() {
               videoUrl
             ) {
 
-              document
-                .getElementById(
-                  "videoContainer"
-                )
-                .innerHTML =
+              videoContainer.innerHTML =
                 '<video controls autoplay playsinline src="' +
                 videoUrl +
                 '"></video>';
 
-            } else {
-
-              log(
-                "RESULTAT: " +
-                JSON.stringify(
-                  parsed
-                )
-              );
-
             }
 
-          } catch {
+          } catch (error) {
 
             log(
-              "DATA: " +
-              data
+              "COMPLETE PARSE ERROR: " +
+              error.message
             );
 
           }
@@ -776,27 +885,48 @@ async function generate() {
           await reader.cancel();
 
           return;
-
         }
 
-        // =================
+        // ------------------------------------------------------
         // ERROR
-        // =================
+        // ------------------------------------------------------
 
         if (
-          type ===
+          eventType ===
           "error"
         ) {
 
-          status(
+          setStatus(
             "❌ ERREUR WAN 2.2\\n\\n" +
+            data
+          );
+
+          log(
+            "ERROR DATA: " +
             data
           );
 
           await reader.cancel();
 
           return;
+        }
 
+        // ------------------------------------------------------
+        // CLOSE
+        // ------------------------------------------------------
+
+        if (
+          eventType ===
+          "close_stream"
+        ) {
+
+          setStatus(
+            "🔌 Flux terminé."
+          );
+
+          await reader.cancel();
+
+          return;
         }
 
       }
@@ -805,18 +935,21 @@ async function generate() {
 
   } catch (error) {
 
-    status(
+    setStatus(
       "❌ " +
       error.message
     );
 
+    log(
+      "EXCEPTION:\\n" +
+      error.stack
+    );
+
   } finally {
 
-    running =
-      false;
+    running = false;
 
-    button.disabled =
-      false;
+    button.disabled = false;
 
     button.textContent =
       "GENERATE TEST VIDEO";
@@ -841,10 +974,13 @@ async function generate() {
 
     }
 
+    // ============================================================
+    // 404
+    // ============================================================
+
     return json({
       error:
         "Route not found"
     }, 404);
-
   }
 };
