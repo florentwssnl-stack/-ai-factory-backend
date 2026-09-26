@@ -8,9 +8,7 @@ export default {
     };
 
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: cors
-      });
+      return new Response(null, { headers: cors });
     }
 
     const HF_BASE =
@@ -27,46 +25,34 @@ export default {
 
     const url = new URL(request.url);
 
-    // =========================
     // HOME
-    // =========================
-
     if (url.pathname === "/") {
       return json({
         service: "AI FACTORY",
         status: "online",
-        version: "5.0"
+        version: "6.0"
       });
     }
 
-    // =========================
     // HEALTH
-    // =========================
-
     if (url.pathname === "/health") {
-
       try {
-
         const response = await fetch(
           `${HF_BASE}/info`,
           {
             headers: {
-              Authorization:
-                `Bearer ${env.HF_TOKEN}`
+              Authorization: `Bearer ${env.HF_TOKEN}`
             }
           }
         );
 
         return json({
           cloudflare: true,
-          huggingface_status:
-            response.status,
-          huggingface_ok:
-            response.ok
+          huggingface_status: response.status,
+          huggingface_ok: response.ok
         });
 
       } catch (error) {
-
         return json({
           cloudflare: true,
           huggingface_ok: false,
@@ -75,51 +61,22 @@ export default {
       }
     }
 
-    // =========================
     // GENERATE
-    // =========================
-
     if (
       url.pathname === "/generate" &&
       request.method === "POST"
     ) {
-
       try {
 
-        const body =
-          await request.json();
+        const body = await request.json();
 
         if (!body.image_url) {
           return json({
-            error:
-              "image_url is required"
+            error: "image_url is required"
           }, 400);
         }
 
-        /*
-          Dependency 0 / generate_video
-
-          Inputs confirmed by /config:
-
-          9  = input image
-          18 = last image
-          6  = prompt
-          26 = steps
-          19 = negative prompt
-          14 = duration
-          29 = guidance scale
-          30 = guidance scale 2
-          22 = seed
-          24 = randomize seed
-          21 = quality
-          31 = scheduler
-          27 = flow shift
-          15 = frame multiplier
-          12 = safe mode
-          32 = LoRA list
-          11 = auto LoRA
-          33 = display result
-        */
+        const sessionHash = crypto.randomUUID();
 
         const data = [
 
@@ -131,15 +88,14 @@ export default {
             mime_type: "image/jpeg",
             is_stream: false,
             meta: {
-              _type:
-                "gradio.FileData"
+              _type: "gradio.FileData"
             }
           },
 
           null,
 
           body.prompt ||
-            "cinematic realistic motion, subtle mysterious movement",
+            "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
 
           body.steps ?? 6,
 
@@ -157,8 +113,7 @@ export default {
 
           body.quality ?? 6,
 
-          body.scheduler ??
-            "UniPCMultistep",
+          body.scheduler ?? "UniPCMultistep",
 
           body.flow_shift ?? 3,
 
@@ -173,101 +128,88 @@ export default {
           body.display_result ?? true
         ];
 
-        const sessionHash =
-          crypto.randomUUID();
-
-        // Rejoindre la queue Gradio
         const response = await fetch(
           `${HF_BASE}/queue/join`,
           {
             method: "POST",
-
             headers: {
               Authorization:
                 `Bearer ${env.HF_TOKEN}`,
-
               "Content-Type":
                 "application/json"
             },
-
             body: JSON.stringify({
-              data: data,
-
+              data,
               fn_index: 0,
-
-              session_hash:
-                sessionHash
+              session_hash: sessionHash
             })
           }
         );
 
-        const result =
-          await response.json();
+        const result = await response.text();
+
+        let parsed;
+
+        try {
+          parsed = JSON.parse(result);
+        } catch {
+          parsed = {
+            raw: result
+          };
+        }
 
         if (!response.ok) {
-
           return json({
             submitted: false,
-            huggingface_status:
-              response.status,
-            result
+            huggingface_status: response.status,
+            result: parsed
           }, 502);
         }
 
         return json({
           submitted: true,
-
-          event_id:
-            result.event_id || null,
-
-          session_hash:
-            sessionHash
+          session_hash: sessionHash,
+          event_id: parsed.event_id || null
         });
 
       } catch (error) {
 
         return json({
           submitted: false,
-          error:
-            error.message
+          error: error.message
         }, 500);
+
       }
     }
 
-    // =========================
-    // RESULT / SSE
-    // =========================
-
+    // SSE RESULT
     if (
       url.pathname === "/result" &&
       request.method === "GET"
     ) {
 
       const sessionHash =
-        url.searchParams.get(
-          "session_hash"
-        );
+        url.searchParams.get("session_hash");
 
       if (!sessionHash) {
-
         return json({
-          error:
-            "session_hash is required"
+          error: "session_hash is required"
         }, 400);
       }
 
       try {
 
-        const response =
-          await fetch(
-            `${HF_BASE}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
-            {
-              headers: {
-                Authorization:
-                  `Bearer ${env.HF_TOKEN}`
-              }
+        const response = await fetch(
+          `${HF_BASE}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
+          {
+            headers: {
+              Authorization:
+                `Bearer ${env.HF_TOKEN}`,
+              Accept:
+                "text/event-stream"
             }
-          );
+          }
+        );
 
         if (!response.ok) {
 
@@ -275,8 +217,8 @@ export default {
             await response.text();
 
           return json({
-            error:
-              errorText
+            error: errorText,
+            huggingface_status: response.status
           }, response.status);
         }
 
@@ -284,17 +226,13 @@ export default {
           response.body,
           {
             status: 200,
-
             headers: {
               "Content-Type":
-                "text/event-stream",
-
+                "text/event-stream; charset=utf-8",
               "Cache-Control":
-                "no-cache",
-
+                "no-cache, no-transform",
               "Connection":
                 "keep-alive",
-
               ...cors
             }
           }
@@ -303,16 +241,13 @@ export default {
       } catch (error) {
 
         return json({
-          error:
-            error.message
+          error: error.message
         }, 500);
+
       }
     }
 
-    // =========================
     // TEST PAGE
-    // =========================
-
     if (url.pathname === "/test") {
 
       return new Response(`
@@ -326,9 +261,9 @@ export default {
 <meta
   name="viewport"
   content="width=device-width,initial-scale=1"
->
+/>
 
-<title>AI FACTORY TEST</title>
+<title>AI FACTORY</title>
 
 <style>
 
@@ -356,7 +291,16 @@ button:disabled {
 
 #status {
   margin-top:20px;
+  line-height:1.5;
   white-space:pre-wrap;
+}
+
+#events {
+  margin-top:20px;
+  font-size:12px;
+  color:#aaa;
+  white-space:pre-wrap;
+  word-break:break-word;
 }
 
 video {
@@ -386,12 +330,33 @@ GENERATE TEST VIDEO
 Prêt.
 </div>
 
-<div id="videoContainer">
-</div>
+<div id="events"></div>
+
+<div id="videoContainer"></div>
 
 <script>
 
 let running = false;
+
+function setStatus(text) {
+
+  document.getElementById(
+    "status"
+  ).textContent = text;
+
+}
+
+function addEvent(text) {
+
+  const box =
+    document.getElementById(
+      "events"
+    );
+
+  box.textContent +=
+    "\\n" + text;
+
+}
 
 async function generate() {
 
@@ -400,10 +365,9 @@ async function generate() {
   running = true;
 
   const button =
-    document.getElementById("button");
-
-  const status =
-    document.getElementById("status");
+    document.getElementById(
+      "button"
+    );
 
   const container =
     document.getElementById(
@@ -413,29 +377,26 @@ async function generate() {
   button.disabled = true;
 
   button.textContent =
-    "GENERATION EN COURS...";
+    "GÉNÉRATION EN COURS...";
 
-  status.textContent =
-    "⏳ Envoi vers Wan 2.2...";
+  setStatus(
+    "⏳ Envoi vers Wan 2.2..."
+  );
 
   try {
-
-    // =====================
-    // 1. START GENERATION
-    // =====================
 
     const response =
       await fetch(
         "/generate",
         {
-          method: "POST",
+          method:"POST",
 
-          headers: {
+          headers:{
             "Content-Type":
               "application/json"
           },
 
-          body: JSON.stringify({
+          body:JSON.stringify({
 
             image_url:
               "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
@@ -446,8 +407,8 @@ async function generate() {
             duration_seconds:
               3.5,
 
-            steps:
-              6
+            steps:6
+
           })
         }
       );
@@ -455,47 +416,41 @@ async function generate() {
     const job =
       await response.json();
 
-    if (
-      !job.session_hash
-    ) {
+    if (!job.session_hash) {
 
       throw new Error(
         JSON.stringify(job)
       );
+
     }
 
-    const sessionHash =
+    const session =
       job.session_hash;
 
-    status.textContent =
+    setStatus(
       "🎬 Génération lancée.\\n\\n" +
       "Session : " +
-      sessionHash +
+      session +
       "\\n\\n" +
-      "⏳ Wan 2.2 travaille...";
+      "Connexion à Wan 2.2..."
+    );
 
-    // =====================
-    // 2. OPEN SSE STREAM
-    // =====================
+    addEvent(
+      "SESSION : " + session
+    );
 
     const resultResponse =
       await fetch(
         "/result?session_hash=" +
-        encodeURIComponent(
-          sessionHash
-        )
+        encodeURIComponent(session)
       );
 
-    if (
-      !resultResponse.ok
-    ) {
-
-      const errorText =
-        await resultResponse.text();
+    if (!resultResponse.ok) {
 
       throw new Error(
-        errorText
+        await resultResponse.text()
       );
+
     }
 
     const reader =
@@ -515,9 +470,16 @@ async function generate() {
       } =
         await reader.read();
 
-      if (done) break;
+      if (done) {
 
-      buffer +=
+        addEvent(
+          "Flux fermé."
+        );
+
+        break;
+      }
+
+      const chunk =
         decoder.decode(
           value,
           {
@@ -525,8 +487,18 @@ async function generate() {
           }
         );
 
+      addEvent(
+        "📡 " +
+        chunk.substring(0,300)
+      );
+
+      buffer += chunk;
+
+      // Accepte LF ou CRLF
       const events =
-        buffer.split("\\n\\n");
+        buffer.split(
+          /\\r?\\n\\r?\\n/
+        );
 
       buffer =
         events.pop();
@@ -537,13 +509,12 @@ async function generate() {
       ) {
 
         const lines =
-          event.split("\\n");
+          event.split(
+            /\\r?\\n/
+          );
 
-        let eventType =
-          "";
-
-        let data =
-          "";
+        let eventType = "";
+        let data = "";
 
         for (
           const line
@@ -560,6 +531,7 @@ async function generate() {
               line
                 .substring(6)
                 .trim();
+
           }
 
           if (
@@ -568,42 +540,47 @@ async function generate() {
             )
           ) {
 
-            data =
+            data +=
               line
                 .substring(5)
                 .trim();
+
           }
+
         }
 
-        // ==================
-        // START
-        // ==================
+        if (
+          eventType ===
+          "heartbeat"
+        ) {
+
+          setStatus(
+            "💓 Wan 2.2 est toujours actif..."
+          );
+
+        }
 
         if (
           eventType ===
           "process_starts"
         ) {
 
-          status.textContent =
-            "⚙️ Wan 2.2 a commencé la génération...";
-        }
+          setStatus(
+            "⚙️ Wan 2.2 démarre la génération..."
+          );
 
-        // ==================
-        // PROGRESS
-        // ==================
+        }
 
         if (
           eventType ===
           "progress"
         ) {
 
-          status.textContent =
-            "🎬 Wan 2.2 génère la vidéo...";
-        }
+          setStatus(
+            "🎬 Wan 2.2 génère la vidéo..."
+          );
 
-        // ==================
-        // DATA
-        // ==================
+        }
 
         if (
           eventType ===
@@ -615,68 +592,64 @@ async function generate() {
             const result =
               JSON.parse(data);
 
-            status.textContent =
-              "🎬 Résultat reçu...";
-
             const video =
-              result[0];
+              result?.[0];
 
             const videoUrl =
               video?.url ||
               video?.path;
 
-            if (
-              videoUrl
-            ) {
+            if (videoUrl) {
+
+              setStatus(
+                "🎬 Vidéo reçue !"
+              );
 
               container.innerHTML =
                 '<video controls autoplay playsinline src="' +
                 videoUrl +
                 '"></video>';
+
             }
 
-          } catch (error) {
+          } catch {
 
-            console.log(
-              "DATA",
-              data
+            addEvent(
+              "DATA : " + data
             );
-          }
-        }
 
-        // ==================
-        // COMPLETE
-        // ==================
+          }
+
+        }
 
         if (
           eventType ===
           "process_completed"
         ) {
 
-          status.textContent =
-            "✅ VIDÉO TERMINÉE !";
+          setStatus(
+            "✅ VIDÉO TERMINÉE !"
+          );
 
           try {
 
             const result =
               JSON.parse(data);
 
-            const outputs =
+            const output =
               result.output ||
               result;
 
             const video =
-              Array.isArray(outputs)
-                ? outputs[0]
-                : outputs;
+              Array.isArray(output)
+                ? output[0]
+                : output;
 
             const videoUrl =
               video?.url ||
               video?.path;
 
-            if (
-              videoUrl
-            ) {
+            if (videoUrl) {
 
               container.innerHTML =
                 '<video controls autoplay playsinline src="' +
@@ -685,42 +658,62 @@ async function generate() {
 
             }
 
-          } catch (error) {
+          } catch {
 
-            status.textContent +=
-              "\\nRésultat reçu.";
+            addEvent(
+              "RESULTAT : " +
+              data
+            );
+
           }
 
           await reader.cancel();
 
           return;
-        }
 
-        // ==================
-        // ERROR
-        // ==================
+        }
 
         if (
           eventType ===
           "error"
         ) {
 
-          status.textContent =
+          setStatus(
             "❌ ERREUR WAN 2.2\\n\\n" +
-            data;
+            data
+          );
 
           await reader.cancel();
 
           return;
+
         }
+
+        if (
+          eventType ===
+          "close_stream"
+        ) {
+
+          setStatus(
+            "🔌 Flux terminé."
+          );
+
+          await reader.cancel();
+
+          return;
+
+        }
+
       }
+
     }
 
   } catch (error) {
 
-    status.textContent =
+    setStatus(
       "❌ " +
-      error.message;
+      error.message
+    );
 
   } finally {
 
@@ -730,7 +723,9 @@ async function generate() {
 
     button.textContent =
       "GENERATE TEST VIDEO";
+
   }
+
 }
 
 </script>
@@ -740,20 +735,18 @@ async function generate() {
 </html>
 
       `, {
-
         headers: {
           "Content-Type":
-            "text/html",
-
+            "text/html; charset=utf-8",
           ...cors
         }
-
       });
+
     }
 
     return json({
-      error:
-        "Route not found"
+      error: "Route not found"
     }, 404);
+
   }
 };
