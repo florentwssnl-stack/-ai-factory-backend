@@ -20,8 +20,6 @@ export default {
 
     const url = new URL(request.url);
 
-    // Accueil
-
     if (url.pathname === "/") {
 
       return new Response(
@@ -32,7 +30,7 @@ export default {
 
           status: "online",
 
-          version: "1.0"
+          version: "1.1"
 
         }),
 
@@ -52,8 +50,6 @@ export default {
 
     }
 
-    // Vérification Hugging Face
-
     if (url.pathname === "/health") {
 
       try {
@@ -63,8 +59,6 @@ export default {
           "https://observantdistressed-wan2-2-i2v-v3.hf.space/gradio_api/info",
 
           {
-
-            method: "GET",
 
             headers: {
 
@@ -82,11 +76,11 @@ export default {
 
           JSON.stringify({
 
-            ok: response.ok,
+            cloudflare: true,
 
             huggingface_status: response.status,
 
-            huggingface_connected: response.ok,
+            huggingface_ok: response.ok,
 
             response: data
 
@@ -114,9 +108,9 @@ export default {
 
           JSON.stringify({
 
-            ok: false,
+            cloudflare: true,
 
-            huggingface_connected: false,
+            huggingface_ok: false,
 
             error: error.message
 
@@ -141,8 +135,6 @@ export default {
       }
 
     }
-
-    // Route inconnue
 
     return new Response(
 
@@ -170,4 +162,4 @@ export default {
 
   }
 
-}
+};
