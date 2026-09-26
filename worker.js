@@ -29,7 +29,7 @@ export default {
       return json({
         service: "AI FACTORY",
         status: "online",
-        version: "4.0"
+        version: "4.1"
       });
     }
 
@@ -140,7 +140,7 @@ export default {
       }
     }
 
-    // RECUPERE LE RESULTAT D'UNE GENERATION
+    // RECUPERE LE RESULTAT
     if (
       url.pathname === "/result" &&
       request.method === "GET"
@@ -155,7 +155,7 @@ export default {
 
       try {
         const response = await fetch(
-          `${HF_BASE}/gradio_api/call/generate_video/${encodeURIComponent(eventId)}`,
+          `${HF_BASE}/gradio_api/call/v2/generate_video/${encodeURIComponent(eventId)}`,
           {
             headers: {
               Authorization: `Bearer ${env.HF_TOKEN}`
@@ -191,6 +191,7 @@ export default {
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI FACTORY TEST</title>
+
 <style>
 body {
   background:#111;
@@ -198,6 +199,7 @@ body {
   font-family:Arial,sans-serif;
   padding:25px;
 }
+
 button {
   background:#ff4d00;
   color:white;
@@ -208,10 +210,16 @@ button {
   font-weight:bold;
   width:100%;
 }
+
+button:disabled {
+  opacity:0.5;
+}
+
 #status {
   margin-top:20px;
   white-space:pre-wrap;
 }
+
 video {
   width:100%;
   margin-top:20px;
@@ -223,6 +231,7 @@ video {
 <body>
 
 <h1>AI FACTORY</h1>
+
 <p>Wan 2.2 — Test vidéo</p>
 
 <button id="button" onclick="generate()">
@@ -243,104 +252,156 @@ async function generate() {
 
   running = true;
 
-  const button = document.getElementById("button");
-  const status = document.getElementById("status");
-  const container = document.getElementById("videoContainer");
+  const button =
+    document.getElementById("button");
+
+  const status =
+    document.getElementById("status");
+
+  const container =
+    document.getElementById("videoContainer");
 
   button.disabled = true;
-  button.textContent = "GENERATION EN COURS...";
-  status.textContent = "⏳ Envoi vers Wan 2.2...";
+
+  button.textContent =
+    "GENERATION EN COURS...";
+
+  status.textContent =
+    "⏳ Envoi vers Wan 2.2...";
 
   try {
 
-    const response = await fetch("/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        image_url:
-          "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
+    const response = await fetch(
+      "/generate",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
+        body: JSON.stringify({
+          image_url:
+            "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
 
-        prompt:
-          "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic"
-      })
-    });
-
-    const job = await response.json();
-
-    if (!job.event_id) {
-      throw new Error(JSON.stringify(job));
-    }
-
-    const eventId = job.event_id;
-
-    status.textContent =
-      "🎬 Génération lancée.\\n\\nEvent ID : " +
-      eventId +
-      "\\n\\n⏳ Wan 2.2 travaille...";
-
-    const resultResponse = await fetch(
-      "/result?event_id=" +
-      encodeURIComponent(eventId)
+          prompt:
+            "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic"
+        })
+      }
     );
 
-    const stream = resultResponse.body.getReader();
-    const decoder = new TextDecoder();
+    const job =
+      await response.json();
+
+    if (!job.event_id) {
+      throw new Error(
+        JSON.stringify(job)
+      );
+    }
+
+    const eventId =
+      job.event_id;
+
+    status.textContent =
+      "🎬 Génération lancée.\\n\\n" +
+      "Event ID : " +
+      eventId +
+      "\\n\\n" +
+      "⏳ Wan 2.2 travaille...";
+
+    const resultResponse =
+      await fetch(
+        "/result?event_id=" +
+        encodeURIComponent(eventId)
+      );
+
+    if (!resultResponse.ok) {
+
+      const errorText =
+        await resultResponse.text();
+
+      throw new Error(
+        "Wan 2.2 : " +
+        errorText
+      );
+    }
+
+    const stream =
+      resultResponse.body.getReader();
+
+    const decoder =
+      new TextDecoder();
 
     let buffer = "";
+
     let finished = false;
 
     while (!finished) {
 
-      const { value, done } = await stream.read();
+      const {
+        value,
+        done
+      } = await stream.read();
 
       if (done) break;
 
-      buffer += decoder.decode(value, {
-        stream: true
-      });
+      buffer +=
+        decoder.decode(
+          value,
+          { stream: true }
+        );
 
-      const events = buffer.split("\\n\\n");
+      const events =
+        buffer.split("\\n\\n");
 
-      buffer = events.pop();
+      buffer =
+        events.pop();
 
       for (const event of events) {
 
-        const lines = event.split("\\n");
+        const lines =
+          event.split("\\n");
 
         let eventType = "";
+
         let data = "";
 
         for (const line of lines) {
 
-          if (line.startsWith("event:")) {
+          if (
+            line.startsWith("event:")
+          ) {
             eventType =
               line.substring(6).trim();
           }
 
-          if (line.startsWith("data:")) {
+          if (
+            line.startsWith("data:")
+          ) {
             data =
               line.substring(5).trim();
           }
         }
 
-        if (eventType === "generating") {
+        if (
+          eventType === "generating"
+        ) {
 
           status.textContent =
             "🎬 Wan 2.2 génère la vidéo...\\n\\n" +
             data;
-
         }
 
-        if (eventType === "complete") {
+        if (
+          eventType === "complete"
+        ) {
 
           status.textContent =
             "✅ VIDÉO TERMINÉE !";
 
           try {
 
-            const result = JSON.parse(data);
+            const result =
+              JSON.parse(data);
 
             const video =
               result[0] || result;
@@ -363,7 +424,7 @@ async function generate() {
                 data;
             }
 
-          } catch (e) {
+          } catch (error) {
 
             status.textContent +=
               "\\n\\nRésultat :\\n" +
@@ -373,7 +434,9 @@ async function generate() {
           finished = true;
         }
 
-        if (eventType === "error") {
+        if (
+          eventType === "error"
+        ) {
 
           status.textContent =
             "❌ ERREUR WAN 2.2\\n\\n" +
@@ -387,14 +450,17 @@ async function generate() {
   } catch (error) {
 
     status.textContent =
-      "❌ Erreur : " +
+      "❌ " +
       error.message;
 
   } finally {
 
     running = false;
+
     button.disabled = false;
-    button.textContent = "GENERATE TEST VIDEO";
+
+    button.textContent =
+      "GENERATE TEST VIDEO";
   }
 }
 
