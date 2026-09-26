@@ -25,191 +25,290 @@ export default {
 
     const url = new URL(request.url);
 
+    // =========================
     // HOME
+    // =========================
+
     if (url.pathname === "/") {
       return json({
         service: "AI FACTORY",
         status: "online",
-        version: "6.0"
+        version: "7.0"
       });
     }
 
+    // =========================
     // HEALTH
+    // =========================
+
     if (url.pathname === "/health") {
+
       try {
+
         const response = await fetch(
           `${HF_BASE}/info`,
           {
             headers: {
-              Authorization: `Bearer ${env.HF_TOKEN}`
+              Authorization:
+                `Bearer ${env.HF_TOKEN}`
             }
           }
         );
 
         return json({
           cloudflare: true,
-          huggingface_status: response.status,
-          huggingface_ok: response.ok
+          huggingface_status:
+            response.status,
+          huggingface_ok:
+            response.ok
         });
 
       } catch (error) {
+
         return json({
           cloudflare: true,
           huggingface_ok: false,
           error: error.message
         }, 500);
+
       }
     }
 
+    // =========================
     // GENERATE
+    // =========================
+
     if (
       url.pathname === "/generate" &&
       request.method === "POST"
     ) {
+
       try {
 
-        const body = await request.json();
+        const body =
+          await request.json();
 
         if (!body.image_url) {
+
           return json({
-            error: "image_url is required"
+            error:
+              "image_url is required"
           }, 400);
+
         }
 
-        const sessionHash = crypto.randomUUID();
+        /*
+          IMPORTANT
+
+          Gradio 6 API:
+          POST /call/generate_video
+
+          Body:
+          {
+            data: [...]
+          }
+
+          The order MUST match
+          the Space's API schema.
+        */
 
         const data = [
 
+          // 1 - input_image
           {
-            path: body.image_url,
-            url: body.image_url,
-            size: null,
-            orig_name: "input.jpg",
-            mime_type: "image/jpeg",
-            is_stream: false,
+            path:
+              body.image_url,
+            url:
+              body.image_url,
+            size:
+              null,
+            orig_name:
+              "input.jpg",
+            mime_type:
+              "image/jpeg",
+            is_stream:
+              false,
             meta: {
-              _type: "gradio.FileData"
+              _type:
+                "gradio.FileData"
             }
           },
 
+          // 2 - last_image
           null,
 
+          // 3 - prompt
           body.prompt ||
-            "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
+            "cinematic realistic motion, subtle mysterious movement, photorealistic",
 
+          // 4 - steps
           body.steps ?? 6,
 
+          // 5 - negative_prompt
           body.negative_prompt ?? "",
 
+          // 6 - duration
           body.duration_seconds ?? 3.5,
 
+          // 7 - guidance_scale
           body.guidance_scale ?? 1,
 
+          // 8 - guidance_scale_2
           body.guidance_scale_2 ?? 1,
 
+          // 9 - seed
           body.seed ?? 42,
 
+          // 10 - randomize_seed
           body.randomize_seed ?? true,
 
+          // 11 - quality
           body.quality ?? 6,
 
-          body.scheduler ?? "UniPCMultistep",
+          // 12 - scheduler
+          body.scheduler ??
+            "UniPCMultistep",
 
+          // 13 - flow_shift
           body.flow_shift ?? 3,
 
+          // 14 - frame_multiplier
           body.frame_multiplier ?? 16,
 
+          // 15 - safe_mode
           body.safe_mode ?? true,
 
+          // 16 - lora_groups
           body.lora_groups ?? [],
 
+          // 17 - auto_lora_enabled
           body.auto_lora_enabled ?? true,
 
+          // 18 - display_result
           body.display_result ?? true
         ];
 
-        const response = await fetch(
-          `${HF_BASE}/queue/join`,
-          {
-            method: "POST",
-            headers: {
-              Authorization:
-                `Bearer ${env.HF_TOKEN}`,
-              "Content-Type":
-                "application/json"
-            },
-            body: JSON.stringify({
-              data,
-              fn_index: 0,
-              session_hash: sessionHash
-            })
-          }
-        );
+        const response =
+          await fetch(
+            `${HF_BASE}/call/generate_video`,
+            {
+              method:
+                "POST",
 
-        const result = await response.text();
+              headers: {
+                Authorization:
+                  `Bearer ${env.HF_TOKEN}`,
+                "Content-Type":
+                  "application/json"
+              },
 
-        let parsed;
+              body:
+                JSON.stringify({
+                  data
+                })
+            }
+          );
+
+        const text =
+          await response.text();
+
+        let result;
 
         try {
-          parsed = JSON.parse(result);
+          result =
+            JSON.parse(text);
         } catch {
-          parsed = {
-            raw: result
+          result = {
+            raw: text
           };
         }
 
         if (!response.ok) {
+
           return json({
-            submitted: false,
-            huggingface_status: response.status,
-            result: parsed
+            submitted:
+              false,
+            huggingface_status:
+              response.status,
+            result
           }, 502);
+
+        }
+
+        if (!result.event_id) {
+
+          return json({
+            submitted:
+              false,
+            error:
+              "Hugging Face did not return an event_id",
+            result
+          }, 502);
+
         }
 
         return json({
-          submitted: true,
-          session_hash: sessionHash,
-          event_id: parsed.event_id || null
+          submitted:
+            true,
+
+          event_id:
+            result.event_id,
+
+          poll_url:
+            `/result?event_id=${encodeURIComponent(
+              result.event_id
+            )}`
         });
 
       } catch (error) {
 
         return json({
-          submitted: false,
-          error: error.message
+          submitted:
+            false,
+          error:
+            error.message
         }, 500);
 
       }
     }
 
-    // SSE RESULT
+    // =========================
+    // RESULT
+    // =========================
+
     if (
       url.pathname === "/result" &&
       request.method === "GET"
     ) {
 
-      const sessionHash =
-        url.searchParams.get("session_hash");
+      const eventId =
+        url.searchParams.get(
+          "event_id"
+        );
 
-      if (!sessionHash) {
+      if (!eventId) {
+
         return json({
-          error: "session_hash is required"
+          error:
+            "event_id is required"
         }, 400);
+
       }
 
       try {
 
-        const response = await fetch(
-          `${HF_BASE}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
-          {
-            headers: {
-              Authorization:
-                `Bearer ${env.HF_TOKEN}`,
-              Accept:
-                "text/event-stream"
+        const response =
+          await fetch(
+            `${HF_BASE}/call/generate_video/${encodeURIComponent(eventId)}`,
+            {
+              headers: {
+                Authorization:
+                  `Bearer ${env.HF_TOKEN}`,
+                Accept:
+                  "text/event-stream"
+              }
             }
-          }
-        );
+          );
 
         if (!response.ok) {
 
@@ -217,22 +316,30 @@ export default {
             await response.text();
 
           return json({
-            error: errorText,
-            huggingface_status: response.status
+            error:
+              errorText,
+            huggingface_status:
+              response.status
           }, response.status);
+
         }
 
         return new Response(
           response.body,
           {
-            status: 200,
+            status:
+              200,
+
             headers: {
               "Content-Type":
                 "text/event-stream; charset=utf-8",
+
               "Cache-Control":
                 "no-cache, no-transform",
+
               "Connection":
                 "keep-alive",
+
               ...cors
             }
           }
@@ -241,13 +348,17 @@ export default {
       } catch (error) {
 
         return json({
-          error: error.message
+          error:
+            error.message
         }, 500);
 
       }
     }
 
-    // TEST PAGE
+    // =========================
+    // TEST
+    // =========================
+
     if (url.pathname === "/test") {
 
       return new Response(`
@@ -263,7 +374,7 @@ export default {
   content="width=device-width,initial-scale=1"
 />
 
-<title>AI FACTORY</title>
+<title>AI FACTORY TEST</title>
 
 <style>
 
@@ -295,10 +406,10 @@ button:disabled {
   white-space:pre-wrap;
 }
 
-#events {
+#log {
   margin-top:20px;
-  font-size:12px;
   color:#aaa;
+  font-size:12px;
   white-space:pre-wrap;
   word-break:break-word;
 }
@@ -330,7 +441,7 @@ GENERATE TEST VIDEO
 Prêt.
 </div>
 
-<div id="events"></div>
+<div id="log"></div>
 
 <div id="videoContainer"></div>
 
@@ -338,7 +449,7 @@ Prêt.
 
 let running = false;
 
-function setStatus(text) {
+function status(text) {
 
   document.getElementById(
     "status"
@@ -346,21 +457,19 @@ function setStatus(text) {
 
 }
 
-function addEvent(text) {
+function log(text) {
 
-  const box =
-    document.getElementById(
-      "events"
-    );
-
-  box.textContent +=
+  document.getElementById(
+    "log"
+  ).textContent +=
     "\\n" + text;
 
 }
 
 async function generate() {
 
-  if (running) return;
+  if (running)
+    return;
 
   running = true;
 
@@ -369,54 +478,62 @@ async function generate() {
       "button"
     );
 
-  const container =
-    document.getElementById(
-      "videoContainer"
-    );
-
-  button.disabled = true;
+  button.disabled =
+    true;
 
   button.textContent =
     "GÉNÉRATION EN COURS...";
 
-  setStatus(
+  status(
     "⏳ Envoi vers Wan 2.2..."
   );
 
   try {
 
-    const response =
+    // =====================
+    // START JOB
+    // =====================
+
+    const start =
       await fetch(
         "/generate",
         {
-          method:"POST",
+          method:
+            "POST",
 
-          headers:{
+          headers: {
             "Content-Type":
               "application/json"
           },
 
-          body:JSON.stringify({
+          body:
+            JSON.stringify({
 
-            image_url:
-              "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
+              image_url:
+                "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
 
-            prompt:
-              "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
+              prompt:
+                "cinematic realistic motion, the scene comes alive, subtle camera movement, natural movement, photorealistic",
 
-            duration_seconds:
-              3.5,
+              duration_seconds:
+                3.5,
 
-            steps:6
+              steps:
+                6
 
-          })
+            })
         }
       );
 
     const job =
-      await response.json();
+      await start.json();
 
-    if (!job.session_hash) {
+    log(
+      "START: " +
+      JSON.stringify(job)
+    );
+
+    if (!job.event_id) {
 
       throw new Error(
         JSON.stringify(job)
@@ -424,37 +541,39 @@ async function generate() {
 
     }
 
-    const session =
-      job.session_hash;
+    const eventId =
+      job.event_id;
 
-    setStatus(
+    status(
       "🎬 Génération lancée.\\n\\n" +
-      "Session : " +
-      session +
+      "Event ID : " +
+      eventId +
       "\\n\\n" +
-      "Connexion à Wan 2.2..."
+      "⏳ Wan 2.2 travaille..."
     );
 
-    addEvent(
-      "SESSION : " + session
-    );
+    // =====================
+    // STREAM RESULT
+    // =====================
 
-    const resultResponse =
+    const result =
       await fetch(
-        "/result?session_hash=" +
-        encodeURIComponent(session)
+        "/result?event_id=" +
+        encodeURIComponent(
+          eventId
+        )
       );
 
-    if (!resultResponse.ok) {
+    if (!result.ok) {
 
       throw new Error(
-        await resultResponse.text()
+        await result.text()
       );
 
     }
 
     const reader =
-      resultResponse.body
+      result.body
         .getReader();
 
     const decoder =
@@ -472,29 +591,22 @@ async function generate() {
 
       if (done) {
 
-        addEvent(
-          "Flux fermé."
+        log(
+          "Flux terminé."
         );
 
         break;
       }
 
-      const chunk =
+      buffer +=
         decoder.decode(
           value,
           {
-            stream:true
+            stream:
+              true
           }
         );
 
-      addEvent(
-        "📡 " +
-        chunk.substring(0,300)
-      );
-
-      buffer += chunk;
-
-      // Accepte LF ou CRLF
       const events =
         buffer.split(
           /\\r?\\n\\r?\\n/
@@ -513,8 +625,11 @@ async function generate() {
             /\\r?\\n/
           );
 
-        let eventType = "";
-        let data = "";
+        let type =
+          "";
+
+        let data =
+          "";
 
         for (
           const line
@@ -527,7 +642,7 @@ async function generate() {
             )
           ) {
 
-            eventType =
+            type =
               line
                 .substring(6)
                 .trim();
@@ -549,99 +664,75 @@ async function generate() {
 
         }
 
+        log(
+          "EVENT: " +
+          type
+        );
+
+        // =================
+        // HEARTBEAT
+        // =================
+
         if (
-          eventType ===
+          type ===
           "heartbeat"
         ) {
 
-          setStatus(
+          status(
             "💓 Wan 2.2 est toujours actif..."
           );
 
         }
 
+        // =================
+        // START
+        // =================
+
         if (
-          eventType ===
+          type ===
+          "generating"
+          ||
+          type ===
           "process_starts"
         ) {
 
-          setStatus(
-            "⚙️ Wan 2.2 démarre la génération..."
+          status(
+            "⚙️ Wan 2.2 génère la vidéo..."
           );
 
         }
 
-        if (
-          eventType ===
-          "progress"
-        ) {
-
-          setStatus(
-            "🎬 Wan 2.2 génère la vidéo..."
-          );
-
-        }
+        // =================
+        // COMPLETE
+        // =================
 
         if (
-          eventType ===
-          "data"
-        ) {
-
-          try {
-
-            const result =
-              JSON.parse(data);
-
-            const video =
-              result?.[0];
-
-            const videoUrl =
-              video?.url ||
-              video?.path;
-
-            if (videoUrl) {
-
-              setStatus(
-                "🎬 Vidéo reçue !"
-              );
-
-              container.innerHTML =
-                '<video controls autoplay playsinline src="' +
-                videoUrl +
-                '"></video>';
-
-            }
-
-          } catch {
-
-            addEvent(
-              "DATA : " + data
-            );
-
-          }
-
-        }
-
-        if (
-          eventType ===
+          type ===
+          "complete"
+          ||
+          type ===
           "process_completed"
         ) {
 
-          setStatus(
-            "✅ VIDÉO TERMINÉE !"
+          status(
+            "🎉 VIDÉO TERMINÉE !"
           );
 
           try {
 
-            const result =
-              JSON.parse(data);
+            const parsed =
+              JSON.parse(
+                data
+              );
 
             const output =
-              result.output ||
-              result;
+              parsed.output ||
+              parsed;
 
             const video =
-              Array.isArray(output)
+              Array.isArray(
+                output
+              )
                 ? output[0]
                 : output;
 
@@ -649,19 +740,34 @@ async function generate() {
               video?.url ||
               video?.path;
 
-            if (videoUrl) {
+            if (
+              videoUrl
+            ) {
 
-              container.innerHTML =
+              document
+                .getElementById(
+                  "videoContainer"
+                )
+                .innerHTML =
                 '<video controls autoplay playsinline src="' +
                 videoUrl +
                 '"></video>';
+
+            } else {
+
+              log(
+                "RESULTAT: " +
+                JSON.stringify(
+                  parsed
+                )
+              );
 
             }
 
           } catch {
 
-            addEvent(
-              "RESULTAT : " +
+            log(
+              "DATA: " +
               data
             );
 
@@ -673,29 +779,18 @@ async function generate() {
 
         }
 
+        // =================
+        // ERROR
+        // =================
+
         if (
-          eventType ===
+          type ===
           "error"
         ) {
 
-          setStatus(
+          status(
             "❌ ERREUR WAN 2.2\\n\\n" +
             data
-          );
-
-          await reader.cancel();
-
-          return;
-
-        }
-
-        if (
-          eventType ===
-          "close_stream"
-        ) {
-
-          setStatus(
-            "🔌 Flux terminé."
           );
 
           await reader.cancel();
@@ -710,16 +805,18 @@ async function generate() {
 
   } catch (error) {
 
-    setStatus(
+    status(
       "❌ " +
       error.message
     );
 
   } finally {
 
-    running = false;
+    running =
+      false;
 
-    button.disabled = false;
+    button.disabled =
+      false;
 
     button.textContent =
       "GENERATE TEST VIDEO";
@@ -745,7 +842,8 @@ async function generate() {
     }
 
     return json({
-      error: "Route not found"
+      error:
+        "Route not found"
     }, 404);
 
   }
