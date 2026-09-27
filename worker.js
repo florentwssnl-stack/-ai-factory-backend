@@ -1,31 +1,29 @@
 const ETERNAL_BASE = "https://open.eternalai.org";
 const ETERNAL_MODEL = "wan-ai/wan2.2-i2v-a14b-lightning";
 
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Content-Type": "application/json; charset=utf-8"
-  };
-}
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Content-Type": "application/json; charset=utf-8"
+};
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: corsHeaders()
+    headers: cors
   });
 }
 
-async function eternalRequest(env, path, options = {}) {
+async function eternalFetch(env, path, options = {}) {
   if (!env.ETERNAL_AI_API_KEY) {
-    throw new Error("ETERNAL_AI_API_KEY is missing");
+    throw new Error("ETERNAL_AI_API_KEY manquante");
   }
 
   const response = await fetch(`${ETERNAL_BASE}${path}`, {
     ...options,
     headers: {
-      "Authorization": `Bearer ${env.ETERNAL_AI_API_KEY}`,
+      Authorization: `Bearer ${env.ETERNAL_AI_API_KEY}`,
       "Content-Type": "application/json",
       ...(options.headers || {})
     }
@@ -42,9 +40,9 @@ async function eternalRequest(env, path, options = {}) {
 
   if (!response.ok) {
     throw new Error(
-      data?.error ||
-      data?.detail ||
-      `Eternal AI HTTP ${response.status}`
+      `Eternal AI HTTP ${response.status}: ${
+        data?.error || data?.detail || text
+      }`
     );
   }
 
@@ -52,36 +50,38 @@ async function eternalRequest(env, path, options = {}) {
 }
 
 
-// ─────────────────────────────────────────────
-// WAN 2.2 — LANCER UNE GÉNÉRATION
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
+// TEST DIRECT WAN 2.2
+// GET /test-eternal
+// ─────────────────────────────────────
 
-async function generateVideo(env, body) {
-  if (!body.image_url) {
-    throw new Error("image_url is required");
-  }
+async function testEternal(env) {
 
-  const prompt =
-    body.prompt ||
-    "A person slowly moves their hand toward a mirror. The reflection reacts slightly late, then slowly smiles while the real person remains expressionless. Subtle realistic horror.";
+  // Image publique de démonstration
+  const imageUrl =
+    "https://cdn.eternalai.org/feed/2025/12/12/11752376-938c-46c5-8799-ab6d32c8599d.jpg";
 
   const payload = {
-    prompt,
-    image_url: body.image_url,
+    prompt:
+      "A person slowly turns their head toward the camera. Natural realistic movement. Cinematic lighting. Static camera.",
+
+    image_url: imageUrl,
+
     model_id: ETERNAL_MODEL,
 
-    // Notre premier test
     duration: "5",
+
     aspect_ratio: "9:16",
+
     resolution: "480p",
 
     negative_prompt:
-      "blur, distorted face, deformed hands, extra fingers, low quality, watermark, text, subtitles, camera shake",
+      "blur, distort, low quality, watermark, text, subtitles",
 
     cfg_scale: 0.5
   };
 
-  const result = await eternalRequest(
+  const result = await eternalFetch(
     env,
     "/api/image-to-video",
     {
@@ -90,208 +90,181 @@ async function generateVideo(env, body) {
     }
   );
 
-  return {
-    success: true,
-    engine: "eternal-ai",
-    model: ETERNAL_MODEL,
-    request_id: result?.result?.request_id,
-    status: "submitted",
-    settings: {
-      duration: "5",
-      aspect_ratio: "9:16",
-      resolution: "480p"
-    }
-  };
+  return result;
 }
 
 
-// ─────────────────────────────────────────────
-// WAN 2.2 — VÉRIFIER UNE GÉNÉRATION
-// ─────────────────────────────────────────────
-
-async function getVideoStatus(env, requestId) {
-  if (!requestId) {
-    throw new Error("request_id is required");
-  }
-
-  const result = await eternalRequest(
-    env,
-    `/api/image-to-video/${encodeURIComponent(requestId)}/status`,
-    {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-      }
-    }
-  );
-
-  return {
-    success: true,
-    engine: "eternal-ai",
-    request_id: requestId,
-    result: result.result || result
-  };
-}
-
-
-// ─────────────────────────────────────────────
-// VÉRIFIER LE COMPTE / CRÉDITS
-// ─────────────────────────────────────────────
-
-async function getBalance(env) {
-  const result = await eternalRequest(
-    env,
-    "/v1/balance",
-    {
-      method: "GET"
-    }
-  );
-
-  return {
-    success: true,
-    balance: result
-  };
-}
-
-
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 // ROUTER
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────
 
 export default {
+
   async fetch(request, env) {
 
-    // CORS
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders()
+        headers: cors
       });
     }
 
     const url = new URL(request.url);
-    const path = url.pathname;
 
     try {
 
-      // ───────────────────────────────────────
       // HOME
-      // ───────────────────────────────────────
-
-      if (request.method === "GET" && path === "/") {
+      if (
+        request.method === "GET" &&
+        url.pathname === "/"
+      ) {
         return json({
           service: "AI FACTORY",
           status: "online",
-          version: "2.0",
-          engine: "Eternal AI / Wan 2.2 I2V A14B Lightning"
+          engine: ETERNAL_MODEL,
+          version: "3.0"
         });
       }
 
 
-      // ───────────────────────────────────────
       // HEALTH
-      // ───────────────────────────────────────
-
-      if (request.method === "GET" && path === "/health") {
+      if (
+        request.method === "GET" &&
+        url.pathname === "/health"
+      ) {
         return json({
           service: "AI FACTORY",
           status: "online",
-          eternal_ai: !!env.ETERNAL_AI_API_KEY,
+          eternal_key_configured:
+            !!env.ETERNAL_AI_API_KEY,
           engine: ETERNAL_MODEL
         });
       }
 
 
-      // ───────────────────────────────────────
-      // BALANCE
-      // ───────────────────────────────────────
+      // TEST RÉEL WAN 2.2
+      if (
+        request.method === "GET" &&
+        url.pathname === "/test-eternal"
+      ) {
 
-      if (request.method === "GET" && path === "/balance") {
-        return json(await getBalance(env));
+        const result = await testEternal(env);
+
+        return json({
+          success: true,
+          engine: "Eternal AI",
+          model: ETERNAL_MODEL,
+          response: result
+        }, 202);
       }
 
 
-      // ───────────────────────────────────────
-      // LANCER UNE VIDÉO
+      // GÉNÉRATION AVEC NOTRE IMAGE
+      //
       // POST /generate
       //
       // {
       //   "image_url": "...",
       //   "prompt": "..."
       // }
-      // ───────────────────────────────────────
-
-      if (request.method === "POST" && path === "/generate") {
-        const body = await request.json();
-
-        const result = await generateVideo(env, body);
-
-        return json(result, 202);
-      }
-
-
-      // Alias explicite
-      // POST /eternal/generate
 
       if (
         request.method === "POST" &&
-        path === "/eternal/generate"
+        url.pathname === "/generate"
       ) {
+
         const body = await request.json();
 
-        const result = await generateVideo(env, body);
+        if (!body.image_url) {
+          return json({
+            success: false,
+            error: "image_url obligatoire"
+          }, 400);
+        }
 
-        return json(result, 202);
-      }
-
-
-      // ───────────────────────────────────────
-      // STATUT D'UNE VIDÉO
-      //
-      // GET /result?request_id=XXXXX
-      // ───────────────────────────────────────
-
-      if (request.method === "GET" && path === "/result") {
-
-        const requestId = url.searchParams.get("request_id");
-
-        const result = await getVideoStatus(
+        const result = await eternalFetch(
           env,
-          requestId
+          "/api/image-to-video",
+          {
+            method: "POST",
+            body: JSON.stringify({
+
+              prompt:
+                body.prompt ||
+                "A person slowly moves their hand toward a mirror. The reflection reacts slightly late and slowly smiles while the real person remains expressionless. Realistic subtle horror.",
+
+              image_url: body.image_url,
+
+              model_id: ETERNAL_MODEL,
+
+              duration: "5",
+
+              aspect_ratio: "9:16",
+
+              resolution: "480p",
+
+              negative_prompt:
+                "blur, distort, low quality, watermark, text, subtitles, camera shake",
+
+              cfg_scale: 0.5
+            })
+          }
         );
 
-        return json(result);
+        return json({
+          success: true,
+          engine: "Eternal AI",
+          model: ETERNAL_MODEL,
+          request: result
+        }, 202);
       }
 
 
-      // Alias explicite
-      // GET /eternal/status?request_id=XXXXX
+      // RÉCUPÉRER LE RÉSULTAT
+      //
+      // GET /result?request_id=XXXXX
 
       if (
         request.method === "GET" &&
-        path === "/eternal/status"
+        url.pathname === "/result"
       ) {
 
         const requestId =
           url.searchParams.get("request_id");
 
-        const result = await getVideoStatus(
+        if (!requestId) {
+          return json({
+            success: false,
+            error: "request_id obligatoire"
+          }, 400);
+        }
+
+        const result = await eternalFetch(
           env,
-          requestId
+          `/api/image-to-video/${encodeURIComponent(requestId)}/status`,
+          {
+            method: "GET",
+            headers: {
+              Authorization:
+                `Bearer ${env.ETERNAL_AI_API_KEY}`
+            }
+          }
         );
 
-        return json(result);
+        return json({
+          success: true,
+          request_id: requestId,
+          result
+        });
       }
 
 
-      // ───────────────────────────────────────
-      // 404
-      // ───────────────────────────────────────
-
       return json({
-        error: "Route not found",
-        path
+        success: false,
+        error: "Route inconnue",
+        path: url.pathname
       }, 404);
+
 
     } catch (error) {
 
