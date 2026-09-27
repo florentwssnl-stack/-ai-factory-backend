@@ -1,633 +1,304 @@
-const WAN_BASE =
-  "https://observantdistressed-wan2-2-i2v-v3.hf.space/gradio_api";
+const ETERNAL_BASE = "https://open.eternalai.org";
+const ETERNAL_MODEL = "wan-ai/wan2.2-i2v-a14b-lightning";
 
-const LTX_BASE =
-  "https://lightricks-ltx-2-3.hf.space/gradio_api";
-
-const hfHeaders = (env) => ({
-  Authorization: `Bearer ${env.HF_TOKEN}`,
-  "Content-Type": "application/json",
-  "x-gradio-user": "api"
-});
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Content-Type": "application/json; charset=utf-8"
+  };
+}
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
+    headers: corsHeaders()
+  });
+}
+
+async function eternalRequest(env, path, options = {}) {
+  if (!env.ETERNAL_AI_API_KEY) {
+    throw new Error("ETERNAL_AI_API_KEY is missing");
+  }
+
+  const response = await fetch(`${ETERNAL_BASE}${path}`, {
+    ...options,
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "*"
+      "Authorization": `Bearer ${env.ETERNAL_AI_API_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
     }
-  });
-}
-
-function corsResponse(response) {
-  const headers = new Headers(response.headers);
-  headers.set("Access-Control-Allow-Origin", "*");
-  headers.set("Access-Control-Allow-Headers", "*");
-  headers.set("Access-Control-Allow-Methods", "*");
-
-  return new Response(response.body, {
-    status: response.status,
-    headers
-  });
-}
-
-function fileDataFromUrl(url, name = "input.png") {
-  return {
-    path: url,
-    url: url,
-    orig_name: name,
-    mime_type: "image/png",
-    is_stream: false,
-    meta: {
-      _type: "gradio.FileData"
-    }
-  };
-}
-
-async function queueJoin(base, data, fnIndex, env) {
-  const sessionHash = crypto.randomUUID();
-
-  const response = await fetch(`${base}/queue/join`, {
-    method: "POST",
-    headers: hfHeaders(env),
-    body: JSON.stringify({
-      data,
-      fn_index: fnIndex,
-      session_hash: sessionHash
-    })
   });
 
   const text = await response.text();
 
-  if (!response.ok) {
-    throw new Error(`Queue join HTTP ${response.status}: ${text}`);
-  }
-
-  let result;
-
+  let data;
   try {
-    result = JSON.parse(text);
+    data = JSON.parse(text);
   } catch {
-    throw new Error(`Réponse queue invalide: ${text}`);
+    data = { raw: text };
   }
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error ||
+      data?.detail ||
+      `Eternal AI HTTP ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+
+// ─────────────────────────────────────────────
+// WAN 2.2 — LANCER UNE GÉNÉRATION
+// ─────────────────────────────────────────────
+
+async function generateVideo(env, body) {
+  if (!body.image_url) {
+    throw new Error("image_url is required");
+  }
+
+  const prompt =
+    body.prompt ||
+    "A person slowly moves their hand toward a mirror. The reflection reacts slightly late, then slowly smiles while the real person remains expressionless. Subtle realistic horror.";
+
+  const payload = {
+    prompt,
+    image_url: body.image_url,
+    model_id: ETERNAL_MODEL,
+
+    // Notre premier test
+    duration: "5",
+    aspect_ratio: "9:16",
+    resolution: "480p",
+
+    negative_prompt:
+      "blur, distorted face, deformed hands, extra fingers, low quality, watermark, text, subtitles, camera shake",
+
+    cfg_scale: 0.5
+  };
+
+  const result = await eternalRequest(
+    env,
+    "/api/image-to-video",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
 
   return {
-    ...result,
-    session_hash: result.session_hash || sessionHash
+    success: true,
+    engine: "eternal-ai",
+    model: ETERNAL_MODEL,
+    request_id: result?.result?.request_id,
+    status: "submitted",
+    settings: {
+      duration: "5",
+      aspect_ratio: "9:16",
+      resolution: "480p"
+    }
   };
 }
 
-async function streamQueue(base, sessionHash, env) {
-  const response = await fetch(
-    `${base}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
+
+// ─────────────────────────────────────────────
+// WAN 2.2 — VÉRIFIER UNE GÉNÉRATION
+// ─────────────────────────────────────────────
+
+async function getVideoStatus(env, requestId) {
+  if (!requestId) {
+    throw new Error("request_id is required");
+  }
+
+  const result = await eternalRequest(
+    env,
+    `/api/image-to-video/${encodeURIComponent(requestId)}/status`,
     {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${env.HF_TOKEN}`,
-        "x-gradio-user": "api",
-        Accept: "text/event-stream"
+        "Content-Type": "application/json"
       }
     }
   );
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Queue stream HTTP ${response.status}: ${text}`);
-  }
-
-  return response;
-}
-
-async function getInfo(base, env) {
-  const response = await fetch(`${base}/info`, {
-    headers: {
-      Authorization: `Bearer ${env.HF_TOKEN}`
-    }
-  });
-
-  const text = await response.text();
-
   return {
-    status: response.status,
-    ok: response.ok,
-    info: text
+    success: true,
+    engine: "eternal-ai",
+    request_id: requestId,
+    result: result.result || result
   };
 }
 
+
+// ─────────────────────────────────────────────
+// VÉRIFIER LE COMPTE / CRÉDITS
+// ─────────────────────────────────────────────
+
+async function getBalance(env) {
+  const result = await eternalRequest(
+    env,
+    "/v1/balance",
+    {
+      method: "GET"
+    }
+  );
+
+  return {
+    success: true,
+    balance: result
+  };
+}
+
+
+// ─────────────────────────────────────────────
+// ROUTER
+// ─────────────────────────────────────────────
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
 
+    // CORS
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Headers": "*",
-          "Access-Control-Allow-Methods": "*"
-        }
+        headers: corsHeaders()
       });
     }
 
-    try {
-      // --------------------------------------------------
-      // HOME
-      // --------------------------------------------------
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-      if (url.pathname === "/") {
+    try {
+
+      // ───────────────────────────────────────
+      // HOME
+      // ───────────────────────────────────────
+
+      if (request.method === "GET" && path === "/") {
         return json({
           service: "AI FACTORY",
           status: "online",
-          version: "12.0",
-          engines: ["wan", "ltx"]
+          version: "2.0",
+          engine: "Eternal AI / Wan 2.2 I2V A14B Lightning"
         });
       }
 
-      // --------------------------------------------------
-      // ENGINES
-      // --------------------------------------------------
 
-      if (url.pathname === "/engines") {
-        return json({
-          engines: {
-            ltx: {
-              name: "LTX 2.3",
-              status: "online",
-              space: "Lightricks/LTX-2-3"
-            },
-            wan: {
-              name: "Wan 2.2",
-              status: "online / quota limited",
-              space: "observantdistressed/wan2-2-i2v-v3"
-            }
-          }
-        });
-      }
-
-      // --------------------------------------------------
+      // ───────────────────────────────────────
       // HEALTH
-      // --------------------------------------------------
+      // ───────────────────────────────────────
 
-      if (url.pathname === "/health") {
-        const [ltx, wan] = await Promise.all([
-          getInfo(LTX_BASE, env),
-          getInfo(WAN_BASE, env)
-        ]);
-
+      if (request.method === "GET" && path === "/health") {
         return json({
-          status: "ok",
-          cloudflare: true,
-          huggingface: {
-            ltx,
-            wan
-          }
+          service: "AI FACTORY",
+          status: "online",
+          eternal_ai: !!env.ETERNAL_AI_API_KEY,
+          engine: ETERNAL_MODEL
         });
       }
 
-      // --------------------------------------------------
-      // GENERATE
-      // --------------------------------------------------
 
-      if (url.pathname === "/generate" && request.method === "POST") {
+      // ───────────────────────────────────────
+      // BALANCE
+      // ───────────────────────────────────────
+
+      if (request.method === "GET" && path === "/balance") {
+        return json(await getBalance(env));
+      }
+
+
+      // ───────────────────────────────────────
+      // LANCER UNE VIDÉO
+      // POST /generate
+      //
+      // {
+      //   "image_url": "...",
+      //   "prompt": "..."
+      // }
+      // ───────────────────────────────────────
+
+      if (request.method === "POST" && path === "/generate") {
         const body = await request.json();
 
-        const engine = body.engine || "ltx";
+        const result = await generateVideo(env, body);
 
-        const imageUrl =
-          body.image_url ||
-          "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png";
-
-        const prompt =
-          body.prompt ||
-          "Make this image come alive with cinematic motion, smooth animation";
-
-        const duration = Number(body.duration || 3);
-
-        // ------------------------------------------------
-        // LTX 2.3
-        // ------------------------------------------------
-
-        if (engine === "ltx") {
-          /*
-            LTX CONFIG EXACT :
-
-            id 5  = image
-            id 6  = prompt
-            id 8  = duration
-            id 10 = enhance prompt
-            id 16 = seed
-            id 17 = randomize seed
-            id 20 = height
-            id 19 = width
-
-            IMPORTANT :
-            generate_video = fn_index 2
-          */
-
-          const data = [
-            fileDataFromUrl(imageUrl),
-            prompt,
-            duration,
-            false,
-            42,
-            true,
-            768,
-            432
-          ];
-
-          const result = await queueJoin(
-            LTX_BASE,
-            data,
-            2,
-            env
-          );
-
-          return json({
-            submitted: true,
-            engine: "ltx",
-            session_hash: result.session_hash,
-            event_id: result.event_id || null
-          });
-        }
-
-        // ------------------------------------------------
-        // WAN 2.2
-        // ------------------------------------------------
-
-        if (engine === "wan") {
-          /*
-            WAN generate_video = fn_index 0
-
-            ordre exact du Space Wan :
-            1  image
-            2  last_image
-            3  prompt
-            4  steps
-            5  negative_prompt
-            6  duration
-            7  guidance
-            8  guidance_2
-            9  seed
-            10 randomize_seed
-            11 quality
-            12 scheduler
-            13 flow_shift
-            14 frame_multiplier
-            15 safe_mode
-            16 lora_groups
-            17 auto_lora
-            18 video_component
-          */
-
-          const data = [
-            fileDataFromUrl(imageUrl),
-            null,
-            prompt,
-            6,
-            "低质量，模糊，失真，静态画面",
-            3.5,
-            1,
-            1,
-            42,
-            true,
-            6,
-            "UniPCMultistep",
-            3,
-            16,
-            true,
-            [],
-            true,
-            true
-          ];
-
-          const result = await queueJoin(
-            WAN_BASE,
-            data,
-            0,
-            env
-          );
-
-          return json({
-            submitted: true,
-            engine: "wan",
-            session_hash: result.session_hash,
-            event_id: result.event_id || null
-          });
-        }
-
-        return json(
-          {
-            error: `Moteur inconnu : ${engine}`
-          },
-          400
-        );
+        return json(result, 202);
       }
 
-      // --------------------------------------------------
-      // RESULT / SSE
-      // --------------------------------------------------
 
-      if (url.pathname === "/result") {
-        const engine = url.searchParams.get("engine") || "ltx";
-        const sessionHash = url.searchParams.get("session_hash");
+      // Alias explicite
+      // POST /eternal/generate
 
-        if (!sessionHash) {
-          return json(
-            {
-              error: "session_hash manquant"
-            },
-            400
-          );
-        }
+      if (
+        request.method === "POST" &&
+        path === "/eternal/generate"
+      ) {
+        const body = await request.json();
 
-        const base =
-          engine === "wan"
-            ? WAN_BASE
-            : LTX_BASE;
+        const result = await generateVideo(env, body);
 
-        const response = await streamQueue(
-          base,
-          sessionHash,
-          env
+        return json(result, 202);
+      }
+
+
+      // ───────────────────────────────────────
+      // STATUT D'UNE VIDÉO
+      //
+      // GET /result?request_id=XXXXX
+      // ───────────────────────────────────────
+
+      if (request.method === "GET" && path === "/result") {
+
+        const requestId = url.searchParams.get("request_id");
+
+        const result = await getVideoStatus(
+          env,
+          requestId
         );
 
-        return corsResponse(response);
+        return json(result);
       }
 
-      // --------------------------------------------------
-      // TEST PAGE
-      // --------------------------------------------------
 
-      if (url.pathname === "/test") {
-        const html = `
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI FACTORY TEST</title>
+      // Alias explicite
+      // GET /eternal/status?request_id=XXXXX
 
-<style>
-body {
-  font-family: Arial, sans-serif;
-  background: #0b0b0b;
-  color: white;
-  padding: 20px;
-}
+      if (
+        request.method === "GET" &&
+        path === "/eternal/status"
+      ) {
 
-button, select {
-  font-size: 18px;
-  padding: 12px;
-  margin: 5px 0;
-  width: 100%;
-}
+        const requestId =
+          url.searchParams.get("request_id");
 
-button {
-  background: #ff5a1f;
-  color: white;
-  border: 0;
-  border-radius: 8px;
-}
+        const result = await getVideoStatus(
+          env,
+          requestId
+        );
 
-pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #151515;
-  padding: 15px;
-  border-radius: 8px;
-}
-</style>
-</head>
-
-<body>
-
-<h1>AI FACTORY</h1>
-
-<select id="engine">
-  <option value="ltx">LTX 2.3</option>
-  <option value="wan">Wan 2.2</option>
-</select>
-
-<button onclick="generate()">GENERATE VIDEO</button>
-
-<pre id="output">Prêt.</pre>
-
-<script>
-
-const output = document.getElementById("output");
-
-async function generate() {
-
-  output.textContent = "Lancement...";
-
-  const engine =
-    document.getElementById("engine").value;
-
-  const response = await fetch("/generate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      engine: engine,
-      image_url:
-        "https://raw.githubusercontent.com/gradio-app/gradio/main/test/test_files/bus.png",
-      prompt:
-        "Make this image come alive with cinematic motion, smooth animation, subtle camera movement",
-      duration: engine === "ltx" ? 3 : 3.5
-    })
-  });
-
-  const start = await response.json();
-
-  output.textContent =
-    "START:\\n" +
-    JSON.stringify(start, null, 2);
-
-  if (!start.session_hash) {
-    return;
-  }
-
-  const resultResponse = await fetch(
-    "/result?engine=" +
-    encodeURIComponent(engine) +
-    "&session_hash=" +
-    encodeURIComponent(start.session_hash)
-  );
-
-  if (!resultResponse.body) {
-    output.textContent +=
-      "\\n\\nERREUR : flux SSE absent";
-    return;
-  }
-
-  const reader =
-    resultResponse.body.getReader();
-
-  const decoder =
-    new TextDecoder();
-
-  let buffer = "";
-
-  while (true) {
-
-    const { value, done } =
-      await reader.read();
-
-    if (done) {
-      output.textContent +=
-        "\\n\\nFLUX FERMÉ";
-      break;
-    }
-
-    buffer += decoder.decode(
-      value,
-      { stream: true }
-    );
-
-    const messages =
-      buffer.split("\\n\\n");
-
-    buffer =
-      messages.pop() || "";
-
-    for (const message of messages) {
-
-      const lines =
-        message.split("\\n");
-
-      for (const line of lines) {
-
-        if (!line.startsWith("data:")) {
-          continue;
-        }
-
-        const raw =
-          line.substring(5).trim();
-
-        if (!raw) {
-          continue;
-        }
-
-        let parsed;
-
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          continue;
-        }
-
-        output.textContent +=
-          "\\n\\nEVENT: " +
-          (parsed.msg || "");
-
-        if (parsed.msg === "process_completed") {
-
-          output.textContent +=
-            "\\n\\nCOMPLETED:\\n" +
-            JSON.stringify(
-              parsed,
-              null,
-              2
-            );
-
-          // Cherche automatiquement une vidéo
-          const data =
-            parsed.output &&
-            parsed.output.data;
-
-          if (Array.isArray(data)) {
-
-            for (const item of data) {
-
-              if (
-                item &&
-                typeof item === "object" &&
-                (
-                  item.url ||
-                  item.path ||
-                  item.video
-                )
-              ) {
-
-                output.textContent +=
-                  "\\n\\nVIDEO TROUVÉE :\\n" +
-                  JSON.stringify(
-                    item,
-                    null,
-                    2
-                  );
-
-                if (item.url) {
-
-                  output.innerHTML +=
-                    "<br><br>" +
-                    '<a href="' +
-                    item.url +
-                    '" target="_blank" style="color:#ff7b39;font-size:20px">' +
-                    "🎬 OUVRIR LA VIDÉO" +
-                    "</a>";
-                }
-              }
-            }
-          }
-        }
-
-        if (
-          parsed.msg === "error" ||
-          parsed.msg === "queue_full"
-        ) {
-
-          output.textContent +=
-            "\\n\\nERREUR:\\n" +
-            JSON.stringify(
-              parsed,
-              null,
-              2
-            );
-        }
-
-        if (parsed.msg === "close_stream") {
-          output.textContent +=
-            "\\n\\nFLUX FERMÉ";
-        }
-      }
-    }
-  }
-}
-
-</script>
-
-</body>
-</html>
-`;
-
-        return new Response(html, {
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Access-Control-Allow-Origin": "*"
-          }
-        });
+        return json(result);
       }
 
-      return json(
-        {
-          error: "Route inconnue"
-        },
-        404
-      );
+
+      // ───────────────────────────────────────
+      // 404
+      // ───────────────────────────────────────
+
+      return json({
+        error: "Route not found",
+        path
+      }, 404);
 
     } catch (error) {
 
-      return json(
-        {
-          error: error.message || String(error)
-        },
-        500
-      );
+      return json({
+        success: false,
+        error: error?.message || String(error)
+      }, 500);
     }
   }
 };
